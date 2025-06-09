@@ -1,0 +1,1 @@
+"""Configuration diff engine scaffold."""

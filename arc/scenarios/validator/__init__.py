@@ -1,0 +1,1 @@
+"""Scenario validation helpers (scaffold)."""

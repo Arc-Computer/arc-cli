@@ -1,0 +1,1 @@
+"""Static scenario library scaffold."""

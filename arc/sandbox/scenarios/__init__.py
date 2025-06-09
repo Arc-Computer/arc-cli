@@ -1,0 +1,1 @@
+"""Scenario generation utilities (scaffold)."""

@@ -1,0 +1,20 @@
+{
+  "id": "circular_dependency",
+  "title": "Circular Tool Dependencies",
+  "category": "logic",
+  "severity": "medium",
+  "trigger_conditions": [
+    "tool A requires tool B output",
+    "tool B requires tool A output",
+    "deadlock conditions"
+  ],
+  "expected_error": "Circular dependency detected",
+  "recovery_patterns": [
+    "dependency graph analysis",
+    "deadlock detection",
+    "alternative execution paths"
+  ],
+  "frequency": "uncommon",
+  "description": "Tools have circular dependencies preventing task completion",
+  "example_instantiation": "Get user location to fetch weather, but weather tool needs location first"
+}

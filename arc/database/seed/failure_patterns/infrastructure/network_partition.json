@@ -1,0 +1,20 @@
+{
+  "id": "network_partition",
+  "title": "Partial Network Connectivity",
+  "category": "infrastructure",
+  "severity": "high",
+  "trigger_conditions": [
+    "DNS resolution works but connection fails",
+    "asymmetric routing",
+    "firewall blocking response"
+  ],
+  "expected_error": "Connection established but no response received",
+  "recovery_patterns": [
+    "circuit breaker pattern",
+    "failover to alternative endpoints",
+    "diagnostic probing"
+  ],
+  "frequency": "rare",
+  "description": "Network partially functional causing confusing failure modes",
+  "example_instantiation": "Can resolve API hostname but packets dropped by corporate firewall"
+}

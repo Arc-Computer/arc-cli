@@ -1,0 +1,20 @@
+{
+  "id": "schema_mismatch",
+  "title": "API Schema Version Mismatch",
+  "category": "data",
+  "severity": "medium",
+  "trigger_conditions": [
+    "field name changes",
+    "nested structure changes",
+    "data type mismatches"
+  ],
+  "expected_error": "KeyError: 'expected_field' not found",
+  "recovery_patterns": [
+    "schema version detection",
+    "field mapping",
+    "graceful field absence handling"
+  ],
+  "frequency": "common",
+  "description": "API returns data in unexpected schema format",
+  "example_instantiation": "Weather API returns 'temp_celsius' instead of expected 'temperature' field"
+}

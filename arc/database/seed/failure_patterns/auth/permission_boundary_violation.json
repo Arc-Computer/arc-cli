@@ -1,0 +1,20 @@
+{
+  "id": "permission_boundary_violation",
+  "title": "Cross-Tenant Permission Violation",
+  "category": "auth",
+  "severity": "critical",
+  "trigger_conditions": [
+    "multi-tenant systems",
+    "context switching",
+    "cached credentials"
+  ],
+  "expected_error": "Access denied: attempting cross-tenant resource access",
+  "recovery_patterns": [
+    "tenant isolation",
+    "credential scoping",
+    "context validation"
+  ],
+  "frequency": "rare",
+  "description": "Agent attempts to access resources across tenant boundaries",
+  "example_instantiation": "Agent caches Company A credentials then tries to access Company B data"
+}

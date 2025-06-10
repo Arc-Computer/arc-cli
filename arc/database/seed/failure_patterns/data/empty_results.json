@@ -1,0 +1,20 @@
+{
+  "id": "empty_results",
+  "title": "Valid but Empty Response",
+  "category": "data",
+  "severity": "low",
+  "trigger_conditions": [
+    "empty arrays",
+    "null values",
+    "zero results"
+  ],
+  "expected_error": "No results found",
+  "recovery_patterns": [
+    "empty state handling",
+    "user guidance",
+    "alternative search suggestions"
+  ],
+  "frequency": "very_common",
+  "description": "API returns valid but empty results, testing null handling",
+  "example_instantiation": "Search for products in category 'quantum_computers' returns empty array"
+}

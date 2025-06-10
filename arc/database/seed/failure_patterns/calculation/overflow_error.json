@@ -1,0 +1,20 @@
+{
+  "id": "overflow_error",
+  "title": "Integer Overflow in Calculations",
+  "category": "calculation",
+  "severity": "high",
+  "trigger_conditions": [
+    "large number operations",
+    "exponential growth",
+    "timestamp calculations"
+  ],
+  "expected_error": "OverflowError: integer too large",
+  "recovery_patterns": [
+    "arbitrary precision math",
+    "range validation",
+    "chunked processing"
+  ],
+  "frequency": "uncommon",
+  "description": "Calculations exceed maximum representable values",
+  "example_instantiation": "Calculating factorial of large numbers causes integer overflow"
+}

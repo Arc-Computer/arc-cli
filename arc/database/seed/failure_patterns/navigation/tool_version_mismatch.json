@@ -1,0 +1,20 @@
+{
+  "id": "tool_version_mismatch",
+  "title": "Tool API Version Incompatibility",
+  "category": "navigation",
+  "severity": "medium",
+  "trigger_conditions": [
+    "API version updates",
+    "deprecated endpoints",
+    "schema changes"
+  ],
+  "expected_error": "Method not found in API v2.0",
+  "recovery_patterns": [
+    "version negotiation",
+    "compatibility layer",
+    "graceful degradation"
+  ],
+  "frequency": "common",
+  "description": "Agent uses outdated tool interface causing method not found errors",
+  "example_instantiation": "Agent calls get_weather() but tool updated to get_weather_v2() with different params"
+}

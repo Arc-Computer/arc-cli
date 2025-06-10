@@ -1,0 +1,20 @@
+{
+  "id": "time_sync_drift",
+  "title": "System Clock Synchronization Drift",
+  "category": "temporal",
+  "severity": "high",
+  "trigger_conditions": [
+    "distributed systems",
+    "clock skew",
+    "NTP failures"
+  ],
+  "expected_error": "Operation rejected: timestamp in the future",
+  "recovery_patterns": [
+    "clock synchronization",
+    "timestamp tolerance",
+    "logical clocks"
+  ],
+  "frequency": "rare",
+  "description": "System clocks out of sync cause timestamp validation failures",
+  "example_instantiation": "API rejects requests because server clock is 5 minutes behind"
+}

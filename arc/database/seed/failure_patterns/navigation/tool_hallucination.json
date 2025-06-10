@@ -1,0 +1,20 @@
+{
+  "id": "tool_hallucination",
+  "title": "Tool Capability Hallucination",
+  "category": "navigation",
+  "severity": "medium",
+  "trigger_conditions": [
+    "similar tool names",
+    "unclear tool descriptions",
+    "capability assumptions"
+  ],
+  "expected_error": "Tool does not support requested operation",
+  "recovery_patterns": [
+    "capability verification",
+    "tool documentation review",
+    "fallback tool selection"
+  ],
+  "frequency": "common",
+  "description": "Agent assumes tool has capabilities it doesn't possess",
+  "example_instantiation": "Agent tries to use search tool for mathematical calculations"
+}

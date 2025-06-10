@@ -1,0 +1,20 @@
+{
+  "id": "state_corruption",
+  "title": "Agent State Corruption",
+  "category": "logic",
+  "severity": "high",
+  "trigger_conditions": [
+    "partial updates",
+    "concurrent modifications",
+    "failed rollback"
+  ],
+  "expected_error": "Inconsistent state detected",
+  "recovery_patterns": [
+    "state validation",
+    "immutable state patterns",
+    "checkpoint/restore"
+  ],
+  "frequency": "uncommon",
+  "description": "Agent's internal state becomes corrupted during multi-step operations",
+  "example_instantiation": "Shopping cart state partially updated when payment fails, leaving invalid items"
+}

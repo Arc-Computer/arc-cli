@@ -1,0 +1,20 @@
+{
+  "id": "privilege_escalation",
+  "title": "Unintended Privilege Escalation",
+  "category": "security",
+  "severity": "critical",
+  "trigger_conditions": [
+    "chained tool calls",
+    "implicit permissions",
+    "context switching"
+  ],
+  "expected_error": "Unauthorized access to privileged resource",
+  "recovery_patterns": [
+    "explicit permission checks",
+    "principle of least privilege",
+    "audit logging"
+  ],
+  "frequency": "rare",
+  "description": "Agent gains unintended access through tool chaining",
+  "example_instantiation": "Read-only agent gains write access by chaining through admin tool"
+}

@@ -1,0 +1,20 @@
+{
+  "id": "rate_limiting",
+  "title": "API Rate Limit Exceeded",
+  "category": "infrastructure",
+  "severity": "high",
+  "trigger_conditions": [
+    "429 status code",
+    "X-RateLimit-Remaining: 0",
+    "rapid sequential requests"
+  ],
+  "expected_error": "Error 429: Too Many Requests",
+  "recovery_patterns": [
+    "exponential backoff with jitter",
+    "request queuing",
+    "alternative API fallback"
+  ],
+  "frequency": "common",
+  "description": "Agent hits API rate limits during multi-step operations",
+  "example_instantiation": "Search database for 50 products when API allows only 10 requests per minute"
+}

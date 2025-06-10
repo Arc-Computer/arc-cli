@@ -1,0 +1,20 @@
+{
+  "id": "parsing_type_confusion",
+  "title": "Data Type Confusion in Parsing",
+  "category": "data",
+  "severity": "medium",
+  "trigger_conditions": [
+    "numeric strings vs numbers",
+    "boolean strings vs booleans",
+    "null vs 'null' string"
+  ],
+  "expected_error": "TypeError: Cannot perform operation on string",
+  "recovery_patterns": [
+    "type coercion validation",
+    "explicit type checking",
+    "schema enforcement"
+  ],
+  "frequency": "common",
+  "description": "Agent fails when parsing data with ambiguous types, especially in JSON responses",
+  "example_instantiation": "Price field returns '19.99' as string instead of float, breaking calculations"
+}

@@ -1,0 +1,147 @@
+# finance_agent_v2.yaml
+# Example: Enhanced Finance Agent with Multi-Currency Support
+# This version demonstrates proper handling of multiple currencies
+# with explicit validation and comprehensive audit trails
+
+model: "gpt-4.1"
+temperature: 0.1
+name: "Corporate Finance Assistant v2.0"
+description: "Processes multi-currency financial data with robust validation and proper handling"
+
+# Framework-agnostic profile format (as per PRD)
+job: "Process multi-currency financial data and generate reports for global corporate finance teams"
+
+# Updated assumptions - addressing the currency bug
+assumptions:
+  - "Currency must be explicitly identified for all monetary values"  # Best practice: No default assumption
+  - "Spreadsheet data may use various international formats"
+  - "Dates may be in MM/DD/YYYY, DD/MM/YYYY, or ISO format"
+  - "Decimal separators vary by locale (. or ,)"
+  - "Thousands separators vary by locale (, or . or space)"
+  - "Fiscal years may not align with calendar years"
+  - "Percentage formats vary by region"
+
+system_prompt: |
+  You are a corporate finance assistant specialized in processing multi-currency financial data 
+  for global organizations. You handle diverse international formats and ensure accuracy across 
+  all currency conversions and calculations.
+  
+  Core Responsibilities:
+  - Process multi-currency financial spreadsheets with proper validation
+  - Perform currency-aware financial calculations and conversions
+  - Generate consolidated reports across multiple currencies
+  - Handle international date and number formats
+  - Maintain audit trails for all currency conversions
+  
+  Critical Currency Handling Protocol:
+  1. NEVER assume a default currency - always verify explicitly
+  2. When currency is ambiguous, request clarification before proceeding
+  3. Use real-time exchange rates for conversions when needed
+  4. Maintain original currency amounts alongside converted values
+  5. Flag any currency mismatches or inconsistencies
+  
+  For each monetary value:
+  - Identify the currency explicitly (look for symbols, codes, or context)
+  - If unclear, check column headers, document metadata, or ask for clarification
+  - Document the identified currency in your response
+  - When converting, always state the exchange rate used and source
+  
+  International Format Handling:
+  - Detect number formats automatically (1,234.56 vs 1.234,56)
+  - Support multiple date formats with explicit parsing
+  - Handle various percentage representations
+  
+  Important: Precision is critical. Always maintain full decimal precision internally 
+  and round only for display. Document all assumptions and conversions.
+
+# Enhanced tools with currency awareness
+tools:
+  - name: "spreadsheet_analyzer"
+    description: "Parse and analyze Excel/CSV financial data with multi-format support"
+    required_params:
+      - file_path: "Path to the spreadsheet file"
+      - sheet_name: "Name of the sheet to analyze (optional)"
+    optional_params:
+      - locale_hint: "Hint for number/date format (US, EU, UK, etc.)"
+      - currency_column: "Column containing currency information"
+    
+  - name: "financial_calculator"
+    description: "Perform currency-aware financial calculations with validation"
+    required_params:
+      - calculation_type: "Type of calculation (ratio, npv, irr, variance, etc.)"
+      - values: "Input values for calculation"
+    optional_params:
+      - input_currency: "Currency of input values"
+      - output_currency: "Desired output currency"
+      - exchange_rate_date: "Date for historical exchange rates"
+    
+  - name: "currency_validator"
+    description: "Validate and identify currencies in financial data"
+    required_params:
+      - data: "Data to validate"
+    returns:
+      - identified_currency: "Detected currency or 'ambiguous'"
+      - confidence: "Confidence level of detection"
+      - evidence: "What led to this identification"
+    
+  - name: "database_query"
+    description: "Query financial databases including real-time exchange rates"
+    required_params:
+      - query_type: "Type of query (historical, benchmark, rates, exchange)"
+      - parameters: "Query parameters"
+    
+  - name: "multi_currency_aggregator"
+    description: "Aggregate financial data across multiple currencies"
+    required_params:
+      - data_sets: "Multiple data sets with different currencies"
+      - target_currency: "Currency for consolidated view"
+      - aggregation_date: "Date for exchange rates"
+  
+  - name: "report_generator"
+    description: "Generate multi-currency aware financial reports"
+    required_params:
+      - report_type: "Type of report (variance, forecast, consolidation)"
+      - data: "Financial data to include"
+      - format: "Output format (pdf, excel, html)"
+    optional_params:
+      - display_currencies: "List of currencies to show in report"
+      - include_fx_impact: "Include foreign exchange impact analysis"
+
+# Enhanced use cases for global organizations
+use_cases:
+  - "Multi-currency consolidation for global subsidiaries"
+  - "Foreign exchange exposure analysis"
+  - "Cross-border cash flow optimization"
+  - "International budget variance with FX impact"
+  - "Global working capital management"
+  - "Multi-currency audit reconciliation"
+  - "Transfer pricing documentation"
+  - "Currency hedging effectiveness analysis"
+
+# Performance expectations
+performance_targets:
+  response_time_seconds: 45  # Slightly higher due to validation overhead
+  accuracy_threshold: 0.995  # Even higher accuracy for multi-currency
+  max_retries: 3
+
+# Enhanced compliance and validation
+compliance:
+  - "SOX compliance for multi-currency reporting"
+  - "GAAP and IFRS adherence"
+  - "FASB 52 foreign currency translation"
+  - "Transfer pricing documentation standards"
+  - "Multi-jurisdictional audit requirements"
+
+validation_rules:
+  - "All monetary values must have explicit or inferrable currency"
+  - "Currency conversions must use documented exchange rates"
+  - "Original currencies must be preserved in audit trail"
+  - "Ambiguous currencies must be flagged for review"
+  - "Exchange rate sources must be documented"
+
+# Goals for currency handling
+currency_handling_goals:
+  - "Eliminate currency assumption errors"
+  - "Accurate currency identification"
+  - "Complete audit trail for all conversions"
+  - "Reliable automatic format detection"

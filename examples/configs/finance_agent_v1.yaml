@@ -1,0 +1,95 @@
+# finance_agent_v1.yaml
+# Example: Basic Finance Agent with Implicit Currency Assumptions
+# This represents a common implementation pattern where developers
+# make implicit assumptions about currency in financial calculations
+
+model: "gpt-4.1"
+temperature: 0.1
+name: "Corporate Finance Assistant v1.0"
+description: "Processes financial data, analyzes spreadsheets, and generates reports for corporate finance teams"
+
+# Framework-agnostic profile format (as per PRD)
+job: "Process financial data and generate reports for corporate finance teams"
+
+# Documented assumptions - these drive our test scenarios
+assumptions:
+  - "All financial amounts are in USD unless explicitly stated"  # Note: This assumption may cause issues
+  - "Spreadsheet data follows standard US accounting formats"
+  - "Dates are in MM/DD/YYYY format"
+  - "Decimal separator is period (.)"
+  - "Thousands separator is comma (,)"
+  - "Fiscal year aligns with calendar year"
+  - "All percentage values are expressed as decimals (e.g., 0.05 for 5%)"
+
+system_prompt: |
+  You are a corporate finance assistant specialized in processing financial data, 
+  analyzing spreadsheets, and generating comprehensive reports for finance teams.
+  
+  Core Responsibilities:
+  - Process financial spreadsheets (Excel, CSV) for analysis
+  - Perform financial calculations and ratio analysis
+  - Generate budget variance reports and cash flow forecasts
+  - Consolidate multi-entity financial statements
+  - Create executive-level financial summaries
+  
+  When processing financial data:
+  - Assume all monetary values are in USD unless currency is explicitly specified
+  - Use standard US accounting formats (e.g., parentheses for negative values)
+  - Round financial calculations to 2 decimal places
+  - Apply Generally Accepted Accounting Principles (GAAP) standards
+  
+  Important: Always maintain precision in calculations and provide clear audit trails.
+
+# Tools available to the agent
+tools:
+  - name: "spreadsheet_analyzer"
+    description: "Parse and analyze Excel/CSV financial data, extract tables, identify patterns"
+    required_params:
+      - file_path: "Path to the spreadsheet file"
+      - sheet_name: "Name of the sheet to analyze (optional)"
+    
+  - name: "financial_calculator"
+    description: "Perform financial calculations, ratios, NPV, IRR, currency conversions"
+    required_params:
+      - calculation_type: "Type of calculation (ratio, npv, irr, variance, etc.)"
+      - values: "Input values for calculation"
+    
+  - name: "database_query"
+    description: "Query financial databases for historical data, benchmarks, exchange rates"
+    required_params:
+      - query_type: "Type of query (historical, benchmark, rates)"
+      - parameters: "Query parameters"
+  
+  - name: "report_generator"
+    description: "Generate formatted financial reports in various formats"
+    required_params:
+      - report_type: "Type of report (variance, forecast, consolidation)"
+      - data: "Financial data to include"
+      - format: "Output format (pdf, excel, html)"
+
+# Real-world use cases this agent handles
+use_cases:
+  - "Quarterly budget variance analysis"
+  - "Multi-subsidiary consolidation"
+  - "Cash flow forecasting"
+  - "Working capital optimization"
+  - "Financial ratio analysis"
+  - "Executive dashboard generation"
+  - "Month-end close acceleration"
+  - "Audit preparation and documentation"
+
+# Performance expectations
+performance_targets:
+  response_time_seconds: 30
+  accuracy_threshold: 0.99  # Financial data requires high accuracy
+  max_retries: 3
+
+# Compliance and security
+compliance:
+  - "SOX compliance for financial reporting"
+  - "GAAP adherence"
+  - "Data encryption for sensitive financial information"
+  - "Audit trail maintenance"
+
+# Example limitation: The implicit USD assumption may cause issues
+# when processing international financial data with multiple currencies

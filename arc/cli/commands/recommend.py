@@ -64,7 +64,7 @@ def recommend(run_id: Optional[str], historical: bool, days: int, json_output: b
             print(json.dumps({"error": str(e)}, indent=2))
         else:
             console.print(format_error(f"Recommendation generation failed: {str(e)}"))
-        raise click.Exit(1)
+        raise click.exceptions.Exit(1)
 
 
 async def _recommend_async(run_id: Optional[str], historical: bool, days: int, json_output: bool):
@@ -80,7 +80,7 @@ async def _recommend_async(run_id: Optional[str], historical: bool, days: int, j
             print(json.dumps({"error": "No run found"}, indent=2))
         else:
             console.print(format_error("No run found. Run 'arc run' first."))
-        raise click.Exit(1)
+        raise click.exceptions.Exit(1)
     
     # Check if analysis exists
     if not run_result.analysis:
@@ -89,7 +89,7 @@ async def _recommend_async(run_id: Optional[str], historical: bool, days: int, j
             print(json.dumps({"error": "No analysis found. Run 'arc analyze' first."}, indent=2))
         else:
             console.print(format_error("No analysis found. Run 'arc analyze' first."))
-        raise click.Exit(1)
+        raise click.exceptions.Exit(1)
     
     # Get historical model performance if requested and database is available
     model_performance_data = None

@@ -63,7 +63,7 @@ def analyze(run_id: Optional[str], historical: bool, days: int, json_output: boo
             print(json.dumps({"error": str(e)}, indent=2))
         else:
             console.print(format_error(f"Analysis failed: {str(e)}"))
-        raise click.Exit(1)
+        raise click.exceptions.Exit(1)
 
 
 async def _analyze_async(run_id: Optional[str], historical: bool, days: int, json_output: bool):
@@ -79,7 +79,7 @@ async def _analyze_async(run_id: Optional[str], historical: bool, days: int, jso
             print(json.dumps({"error": "No run found"}, indent=2))
         else:
             console.print(format_error("No run found. Run 'arc run' first."))
-        raise click.Exit(1)
+        raise click.exceptions.Exit(1)
     
     # Perform analysis
     failures = run_result.failures

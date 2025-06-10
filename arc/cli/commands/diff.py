@@ -74,7 +74,7 @@ def diff(config1: str, config2: str, scenarios: int, historical: bool, modal: bo
             print(json.dumps({"error": str(e)}, indent=2))
         else:
             console.print(format_error(f"Comparison failed: {str(e)}"))
-        raise click.Exit(1)
+        raise click.exceptions.Exit(1)
 
 
 async def _diff_async(config1: str, config2: str, scenarios: int, historical: bool, modal: bool, json_output: bool):

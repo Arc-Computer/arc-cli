@@ -43,7 +43,7 @@ def status(days: int, limit: int, json_output: bool):
             print(json.dumps({"error": str(e)}, indent=2))
         else:
             console.print(format_error(f"Status check failed: {str(e)}"))
-        raise click.Exit(1)
+        raise click.exceptions.Exit(1)
 
 
 async def _show_status_async(days: int, limit: int, json_output: bool):

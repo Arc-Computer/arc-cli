@@ -6,7 +6,6 @@ from datetime import datetime, timedelta
 
 import click
 from rich.table import Table
-from rich.panel import Panel
 from rich.progress import Progress, SpinnerColumn, TextColumn
 from sqlalchemy import text
 

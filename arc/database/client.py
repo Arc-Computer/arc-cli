@@ -1,34 +1,469 @@
-"""Async database client scaffold.
+"""Enhanced async database client for TimescaleDB integration.
 
-Replace with real SQLAlchemy AsyncEngine + session helpers.
+Provides high-level database operations optimized for TimescaleDB features
+including hypertables, continuous aggregates, and time-series queries.
 """
 
 from __future__ import annotations
 
-from typing import AsyncIterator
+import os
+from typing import AsyncIterator, Dict, List, Optional, Any
+from datetime import datetime, timedelta
+import json
+import hashlib
+import uuid
 
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
+from sqlalchemy import text, select, insert, update, delete
+import asyncpg
 
-__all__: list[str] = ["get_engine", "get_session"]
+__all__: list[str] = ["get_engine", "get_session", "ArcEvalDBClient", "TimescaleDBHealth"]
 
 _engine: AsyncEngine | None = None
 
 
-def get_engine(dsn: str | None = None) -> AsyncEngine:  # noqa: D401
-    """Return a cached AsyncEngine (scaffold)."""
-
+def get_engine(dsn: str | None = None) -> AsyncEngine:
+    """Return a cached AsyncEngine optimized for TimescaleDB."""
     global _engine
     if _engine is None:
-        dsn = dsn or "postgresql+asyncpg://user:pass@localhost:5432/arc"
-        _engine = create_async_engine(dsn, echo=False, future=True)
+        # Use environment variables for TimescaleDB connection
+        dsn = dsn or os.getenv(
+            "TIMESCALE_SERVICE_URL",
+            "postgresql+asyncpg://user:pass@localhost:5432/arc"
+        )
+        
+        # Handle connection string format conversion
+        if dsn.startswith("postgres://"):
+            dsn = dsn.replace("postgres://", "postgresql+asyncpg://", 1)
+        elif dsn.startswith("postgresql://"):
+            dsn = dsn.replace("postgresql://", "postgresql+asyncpg://", 1)
+        elif not dsn.startswith("postgresql+asyncpg://"):
+            # If no dialect specified, add it
+            if "://" in dsn:
+                dsn = dsn.replace("://", "+asyncpg://", 1)
+        
+        # Remove sslmode from connection string if present (handled in connect_args)
+        if "?sslmode=" in dsn:
+            dsn = dsn.split("?sslmode=")[0]
+        elif "&sslmode=" in dsn:
+            dsn = dsn.split("&sslmode=")[0]
+        
+        _engine = create_async_engine(
+            dsn, 
+            echo=False, 
+            future=True,
+            pool_size=20,
+            max_overflow=30,
+            pool_timeout=30,
+            pool_recycle=3600,  # 1 hour
+            connect_args={
+                "ssl": "require",  # SSL for TimescaleDB Cloud
+                "server_settings": {
+                    "jit": "off",  # Recommended for analytical workloads
+                    "timezone": "UTC"
+                }
+            }
+        )
     return _engine
 
 
-async def get_session() -> AsyncIterator[AsyncSession]:  # pragma: no cover
-    """Yield an AsyncSession bound to the global engine (scaffold)."""
-
+async def get_session() -> AsyncIterator[AsyncSession]:
+    """Yield an AsyncSession bound to the global engine."""
     engine = get_engine()
     async_session = sessionmaker(engine, expire_on_commit=False, class_=AsyncSession)
     async with async_session() as session:
         yield session
+
+
+class TimescaleDBHealth:
+    """Health monitoring for TimescaleDB instance."""
+    
+    def __init__(self, engine: AsyncEngine):
+        self.engine = engine
+    
+    async def check_extensions(self) -> Dict[str, str]:
+        """Check that required extensions are installed."""
+        async with self.engine.begin() as conn:
+            result = await conn.execute(text("""
+                SELECT name, installed_version 
+                FROM pg_available_extensions 
+                WHERE name IN ('timescaledb', 'uuid-ossp', 'vector')
+                AND installed_version IS NOT NULL
+            """))
+            return {row.name: row.installed_version for row in result}
+    
+    async def check_hypertables(self) -> List[Dict[str, Any]]:
+        """Check status of hypertables."""
+        async with self.engine.begin() as conn:
+            result = await conn.execute(text("""
+                SELECT 
+                    hypertable_name,
+                    num_chunks,
+                    compression_enabled
+                FROM timescaledb_information.hypertables
+            """))
+            return [dict(row._mapping) for row in result]
+    
+    async def check_compression_stats(self) -> List[Dict[str, Any]]:
+        """Check compression statistics."""
+        async with self.engine.begin() as conn:
+            result = await conn.execute(text("""
+                SELECT 
+                    hypertable_name,
+                    total_chunks,
+                    number_compressed_chunks,
+                    uncompressed_heap_size,
+                    compressed_heap_size,
+                    compressed_index_size,
+                    compressed_toast_size
+                FROM timescaledb_information.compression_settings cs
+                JOIN timescaledb_information.hypertables h 
+                    ON cs.hypertable_name = h.hypertable_name
+            """))
+            return [dict(row._mapping) for row in result]
+
+
+class ArcEvalDBClient:
+    """
+    High-level database client for Arc-Eval platform.
+    Optimized for TimescaleDB features and Modal sandbox integration.
+    """
+    
+    def __init__(self, connection_string: str | None = None):
+        self.connection_string = connection_string or os.getenv("TIMESCALE_SERVICE_URL")
+        self.engine = get_engine(self.connection_string)
+        self.health = TimescaleDBHealth(self.engine)
+    
+    async def initialize(self) -> Dict[str, Any]:
+        """Initialize database connection and verify TimescaleDB setup."""
+        try:
+            # Check extensions
+            extensions = await self.health.check_extensions()
+            
+            # Check hypertables
+            hypertables = await self.health.check_hypertables()
+            
+            return {
+                "status": "healthy",
+                "extensions": extensions,
+                "hypertables": hypertables,
+                "timestamp": datetime.utcnow().isoformat()
+            }
+        except Exception as e:
+            return {
+                "status": "error",
+                "error": str(e),
+                "timestamp": datetime.utcnow().isoformat()
+            }
+    
+    async def deploy_schema(self) -> Dict[str, Any]:
+        """Deploy the complete schema to TimescaleDB."""
+        try:
+            schema_file = os.path.join(os.path.dirname(__file__), "schema", "tables.sql")
+            indexes_file = os.path.join(os.path.dirname(__file__), "schema", "indexes.sql")
+            
+            # Read schema files
+            with open(schema_file, 'r') as f:
+                schema_sql = f.read()
+            
+            with open(indexes_file, 'r') as f:
+                indexes_sql = f.read()
+            
+            # Split SQL into individual statements, handling DO blocks properly
+            def split_sql_statements(sql_content):
+                statements = []
+                current_statement = ""
+                in_do_block = False
+                
+                for line in sql_content.split('\n'):
+                    line = line.strip()
+                    if not line or line.startswith('--'):
+                        continue
+                    
+                    current_statement += line + '\n'
+                    
+                    # Check for DO block start
+                    if line.startswith('DO $$'):
+                        in_do_block = True
+                    
+                    # Check for DO block end
+                    if in_do_block and line == 'END $$;':
+                        in_do_block = False
+                        statements.append(current_statement.strip())
+                        current_statement = ""
+                    elif not in_do_block and line.endswith(';'):
+                        statements.append(current_statement.strip())
+                        current_statement = ""
+                
+                if current_statement.strip():
+                    statements.append(current_statement.strip())
+                
+                return statements
+            
+            schema_statements = split_sql_statements(schema_sql)
+            indexes_statements = split_sql_statements(indexes_sql)
+            
+            # Separate continuous aggregates and policies (can't run in transaction)
+            continuous_agg_statements = []
+            policy_statements = []
+            other_statements = []
+            
+            for stmt in indexes_statements:
+                if 'CREATE MATERIALIZED VIEW' in stmt and 'timescaledb.continuous' in stmt:
+                    continuous_agg_statements.append(stmt)
+                elif 'add_continuous_aggregate_policy' in stmt or 'add_compression_policy' in stmt or 'add_retention_policy' in stmt:
+                    policy_statements.append(stmt)
+                else:
+                    other_statements.append(stmt)
+            
+            async with self.engine.begin() as conn:
+                # Execute schema statements one by one
+                for stmt in schema_statements:
+                    if stmt:
+                        await conn.execute(text(stmt))
+                
+                # Execute non-continuous aggregate statements
+                for stmt in other_statements:
+                    if stmt:
+                        await conn.execute(text(stmt))
+            
+            # Execute continuous aggregates outside transaction (autocommit mode)
+            for stmt in continuous_agg_statements:
+                if stmt:
+                    async with self.engine.connect() as conn:
+                        await conn.execute(text(stmt))
+            
+            # Execute policies after continuous aggregates are created
+            for stmt in policy_statements:
+                if stmt:
+                    async with self.engine.connect() as conn:
+                        await conn.execute(text(stmt))
+            
+            return {
+                "status": "success", 
+                "message": "Schema deployed successfully",
+                "timestamp": datetime.utcnow().isoformat()
+            }
+        except Exception as e:
+            return {
+                "status": "error",
+                "error": str(e),
+                "timestamp": datetime.utcnow().isoformat()
+            }
+    
+    # Configuration Management
+    async def create_configuration(self, name: str, user_id: str, 
+                                 initial_config: Dict[str, Any]) -> str:
+        """Create a new configuration with initial version."""
+        config_id = str(uuid.uuid4())
+        version_id = str(uuid.uuid4())
+        
+        # Generate config hash
+        config_yaml = json.dumps(initial_config, sort_keys=True)
+        config_hash = hashlib.sha256(config_yaml.encode()).hexdigest()
+        
+        async with self.engine.begin() as conn:
+            # Create configuration
+            await conn.execute(text("""
+                INSERT INTO configurations (config_id, name, user_id, latest_version_id)
+                VALUES (:config_id, :name, :user_id, :version_id)
+            """), {
+                "config_id": config_id,
+                "name": name,
+                "user_id": user_id,
+                "version_id": version_id
+            })
+            
+            # Create initial version
+            await conn.execute(text("""
+                INSERT INTO config_versions (
+                    version_id, config_id, version_number, raw_yaml, 
+                    parsed_config, config_hash
+                ) VALUES (:version_id, :config_id, 1, :raw_yaml, :parsed_config, :config_hash)
+            """), {
+                "version_id": version_id,
+                "config_id": config_id,
+                "raw_yaml": config_yaml,
+                "parsed_config": json.dumps(initial_config),
+                "config_hash": config_hash
+            })
+        
+        return config_id
+    
+    # Simulation Management
+    async def create_simulation(self, config_version_id: str, scenario_set: List[str],
+                              simulation_name: str = None, 
+                              modal_app_id: str = None) -> str:
+        """Create a new simulation run."""
+        simulation_id = str(uuid.uuid4())
+        
+        async with self.engine.begin() as conn:
+            await conn.execute(text("""
+                INSERT INTO simulations (
+                    simulation_id, config_version_id, scenario_set, 
+                    simulation_name, total_scenarios, modal_app_id, status
+                ) VALUES (:simulation_id, :config_version_id, :scenario_set, 
+                         :simulation_name, :total_scenarios, :modal_app_id, 'pending')
+            """), {
+                "simulation_id": simulation_id,
+                "config_version_id": config_version_id,
+                "scenario_set": scenario_set,
+                "simulation_name": simulation_name,
+                "total_scenarios": len(scenario_set),
+                "modal_app_id": modal_app_id
+            })
+        
+        return simulation_id
+    
+    # Outcome Recording (Optimized for TimescaleDB hypertable)
+    async def record_outcome(self, outcome_data: Dict[str, Any]) -> str:
+        """Record individual scenario outcome to TimescaleDB hypertable."""
+        outcome_id = str(uuid.uuid4())
+        
+        async with self.engine.begin() as conn:
+            await conn.execute(text("""
+                INSERT INTO outcomes (
+                    outcome_id, simulation_id, scenario_id, execution_time,
+                    status, reliability_score, execution_time_ms, tokens_used,
+                    cost_usd, trajectory, modal_call_id, sandbox_id,
+                    error_code, error_category, retry_count, metrics
+                ) VALUES (
+                    :outcome_id, :simulation_id, :scenario_id, :execution_time,
+                    :status, :reliability_score, :execution_time_ms, :tokens_used,
+                    :cost_usd, :trajectory, :modal_call_id, :sandbox_id,
+                    :error_code, :error_category, :retry_count, :metrics
+                )
+            """), {
+                "outcome_id": outcome_id,
+                "simulation_id": outcome_data["simulation_id"],
+                "scenario_id": outcome_data["scenario_id"],
+                "execution_time": outcome_data.get("execution_time", datetime.utcnow()),
+                "status": outcome_data["status"],
+                "reliability_score": outcome_data["reliability_score"],
+                "execution_time_ms": outcome_data["execution_time_ms"],
+                "tokens_used": outcome_data["tokens_used"],
+                "cost_usd": outcome_data["cost_usd"],
+                "trajectory": json.dumps(outcome_data["trajectory"]),
+                "modal_call_id": outcome_data.get("modal_call_id"),
+                "sandbox_id": outcome_data.get("sandbox_id"),
+                "error_code": outcome_data.get("error_code"),
+                "error_category": outcome_data.get("error_category"),
+                "retry_count": outcome_data.get("retry_count", 0),
+                "metrics": json.dumps(outcome_data.get("metrics", {}))
+            })
+        
+        return outcome_id
+    
+    # Batch Operations (Optimized for high-throughput Modal executions)
+    async def record_outcomes_batch(self, outcomes: List[Dict[str, Any]]) -> List[str]:
+        """Batch insert outcomes for high-throughput Modal executions."""
+        outcome_ids = [str(uuid.uuid4()) for _ in outcomes]
+        
+        batch_data = []
+        for i, outcome in enumerate(outcomes):
+            batch_data.append({
+                "outcome_id": outcome_ids[i],
+                "simulation_id": outcome["simulation_id"],
+                "scenario_id": outcome["scenario_id"],
+                "execution_time": outcome.get("execution_time", datetime.utcnow()),
+                "status": outcome["status"],
+                "reliability_score": outcome["reliability_score"],
+                "execution_time_ms": outcome["execution_time_ms"],
+                "tokens_used": outcome["tokens_used"],
+                "cost_usd": outcome["cost_usd"],
+                "trajectory": json.dumps(outcome["trajectory"]),
+                "modal_call_id": outcome.get("modal_call_id"),
+                "sandbox_id": outcome.get("sandbox_id"),
+                "error_code": outcome.get("error_code"),
+                "error_category": outcome.get("error_category"),
+                "retry_count": outcome.get("retry_count", 0),
+                "metrics": json.dumps(outcome.get("metrics", {}))
+            })
+        
+        async with self.engine.begin() as conn:
+            await conn.execute(text("""
+                INSERT INTO outcomes (
+                    outcome_id, simulation_id, scenario_id, execution_time,
+                    status, reliability_score, execution_time_ms, tokens_used,
+                    cost_usd, trajectory, modal_call_id, sandbox_id,
+                    error_code, error_category, retry_count, metrics
+                ) VALUES (
+                    :outcome_id, :simulation_id, :scenario_id, :execution_time,
+                    :status, :reliability_score, :execution_time_ms, :tokens_used,
+                    :cost_usd, :trajectory, :modal_call_id, :sandbox_id,
+                    :error_code, :error_category, :retry_count, :metrics
+                )
+            """), batch_data)
+        
+        return outcome_ids
+    
+    # Analytics Queries (Direct queries since continuous aggregates are not deployed yet)
+    async def get_simulation_performance(self, simulation_id: str, 
+                                       time_range: timedelta = timedelta(days=7)) -> Dict[str, Any]:
+        """Get simulation performance metrics using direct TimescaleDB queries."""
+        async with self.engine.begin() as conn:
+            # Convert timedelta to PostgreSQL interval string
+            total_seconds = int(time_range.total_seconds())
+            interval_str = f"'{total_seconds} seconds'"
+            
+            # Query outcomes table directly with time bucketing
+            # Note: Using string formatting for interval since PostgreSQL doesn't allow parameters after INTERVAL
+            query = f"""
+                SELECT 
+                    time_bucket('1 hour', execution_time) AS hour,
+                    COUNT(*) AS total_outcomes,
+                    AVG(reliability_score) AS avg_reliability,
+                    AVG(execution_time_ms) AS avg_execution_time,
+                    SUM(cost_usd) AS total_cost,
+                    SUM(CASE WHEN status = 'error' THEN 1 ELSE 0 END) AS error_count
+                FROM outcomes
+                WHERE simulation_id = :simulation_id
+                AND execution_time >= NOW() - INTERVAL {interval_str}
+                GROUP BY hour
+                ORDER BY hour DESC
+            """
+            
+            result = await conn.execute(text(query), {
+                "simulation_id": simulation_id
+            })
+            
+            rows = [dict(row._mapping) for row in result]
+            
+            return {
+                "simulation_id": simulation_id,
+                "time_range_hours": int(time_range.total_seconds() / 3600),
+                "hourly_metrics": rows,
+                "summary": {
+                    "total_outcomes": sum(r["total_outcomes"] for r in rows),
+                    "avg_reliability": sum(r["avg_reliability"] for r in rows) / len(rows) if rows else 0,
+                    "total_cost": sum(r["total_cost"] for r in rows)
+                }
+            }
+    
+    async def get_recent_failures(self, limit: int = 50) -> List[Dict[str, Any]]:
+        """Get recent failures for analysis."""
+        async with self.engine.begin() as conn:
+            result = await conn.execute(text("""
+                SELECT 
+                    o.outcome_id,
+                    o.simulation_id,
+                    o.scenario_id,
+                    o.execution_time,
+                    o.status,
+                    o.error_code,
+                    o.error_category,
+                    o.modal_call_id,
+                    o.trajectory->>'error_message' as error_message
+                FROM outcomes o
+                WHERE o.status IN ('error', 'timeout', 'cancelled')
+                ORDER BY o.execution_time DESC
+                LIMIT :limit
+            """), {"limit": limit})
+            
+            return [dict(row._mapping) for row in result]
+    
+    async def close(self):
+        """Close database connections."""
+        if self.engine:
+            await self.engine.dispose()

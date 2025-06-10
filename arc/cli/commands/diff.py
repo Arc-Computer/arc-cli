@@ -162,7 +162,7 @@ def diff(config1: str, config2: str, scenarios: int, json_output: bool):
             if analysis["significant"]:
                 console.print(format_success(f"✓ Improvement is statistically significant (p = {analysis['p_value']:.4f})"))
             else:
-                console.print(format_warning(f"! Improvement is NOT statistically significant (p = {analysis['p_value']:.4f})"))
+                console.print(format_warning(f"Improvement is NOT statistically significant (p = {analysis['p_value']:.4f})"))
             
             console.print_metric("Effect size (Cohen's d)", f"{analysis['effect_size']:.2f}")
             console.print_metric("Confidence interval", f"[{analysis['ci_lower']:.1%}, {analysis['ci_upper']:.1%}]")

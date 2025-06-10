@@ -95,7 +95,7 @@ class ScenarioGenerator:
         if self.use_patterns and pattern_ratio > 0:
             # Generate pattern-based scenarios
             pattern_count = int(count * pattern_ratio)
-            print(f"\n🔧 Generating {pattern_count} pattern-based scenarios...")
+            print(f"\nGenerating {pattern_count} pattern-based scenarios...")
             
             pattern_scenarios = await self._generate_pattern_based_scenarios(pattern_count)
             all_scenarios.extend(pattern_scenarios)
@@ -103,7 +103,7 @@ class ScenarioGenerator:
             # Generate remaining with LLM
             llm_count = count - len(pattern_scenarios)
             if llm_count > 0:
-                print(f"\n🤖 Generating {llm_count} additional LLM scenarios...")
+                print(f"\nGenerating {llm_count} additional LLM scenarios...")
                 llm_scenarios = await self._generate_llm_scenarios(llm_count, batch_size)
                 all_scenarios.extend(llm_scenarios)
         else:
@@ -135,7 +135,7 @@ class ScenarioGenerator:
     
     def _apply_quality_filtering(self, scenarios: List[Scenario]) -> List[Scenario]:
         """Apply quality scoring and deduplication"""
-        print(f"\n🔍 Applying quality filtering to {len(scenarios)} scenarios...")
+        print(f"\nApplying quality filtering to {len(scenarios)} scenarios...")
         
         # Convert to dict format for scoring
         scenario_dicts = [s.to_dict() for s in scenarios]
@@ -144,14 +144,14 @@ class ScenarioGenerator:
         passed_dicts, failed_dicts = self.quality_scorer.score_batch(scenario_dicts)
         self.metrics.scenarios_rejected = len(failed_dicts)
         
-        print(f"  ✅ {len(passed_dicts)} passed quality threshold")
-        print(f"  ❌ {len(failed_dicts)} rejected")
+        print(f"  ✓ {len(passed_dicts)} passed quality threshold")
+        print(f"  ✗ {len(failed_dicts)} rejected")
         
         # Deduplicate
         unique_dicts = self.deduplicator.deduplicate_batch(passed_dicts)
         self.metrics.duplicates_removed = len(passed_dicts) - len(unique_dicts)
         
-        print(f"  🔄 {self.metrics.duplicates_removed} duplicates removed")
+        print(f"  • {self.metrics.duplicates_removed} duplicates removed")
         
         # Convert back to Scenario objects
         filtered_scenarios = []
@@ -188,7 +188,7 @@ class ScenarioGenerator:
         data = self.prepare_for_sandbox(scenarios)
         with open(output_path, 'w') as f:
             json.dump(data, f, indent=2)
-        print(f"💾 Saved {len(scenarios)} scenarios to {output_path}")
+        print(f"Saved {len(scenarios)} scenarios to {output_path}")
     
     def get_generation_summary(self) -> Dict[str, Any]:
         """Get comprehensive generation summary"""
@@ -241,7 +241,7 @@ async def generate_high_quality_scenarios(
     Returns:
         List of generated scenarios
     """
-    print(f"🚀 Generating {count} high-quality scenarios")
+    print(f"Generating {count} high-quality scenarios")
     print(f"   Pattern-based: {use_patterns} ({pattern_ratio*100:.0f}% if enabled)")
     print(f"   Quality threshold: {quality_threshold}")
     
@@ -261,7 +261,7 @@ async def generate_high_quality_scenarios(
     
     # Print summary
     summary = generator.get_generation_summary()
-    print(f"\n✅ Generation complete!")
+    print(f"\n✓ Generation complete")
     print(f"   Generated: {summary['total_generated']} scenarios")
     print(f"   Cost: {summary['generation_cost']}")
     if use_patterns:

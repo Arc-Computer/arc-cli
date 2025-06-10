@@ -55,4 +55,4 @@ def format_success(message: str) -> Text:
 
 def format_warning(message: str) -> Text:
     """Format a warning message."""
-    return Text(f"! {message}", style="warning")
+    return Text(f"[WARNING] {message}", style="warning")

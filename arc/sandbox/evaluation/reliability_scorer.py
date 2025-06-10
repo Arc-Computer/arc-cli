@@ -1,5 +1,5 @@
 """
-Reliability Scoring Module for Arc-Eval Production
+Reliability Scoring Module for Arc Production
 Production version adapted from experiments/src/evaluation/reliability_scorer.py
 """
 

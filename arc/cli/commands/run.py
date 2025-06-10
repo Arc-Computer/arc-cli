@@ -15,6 +15,8 @@ from rich.panel import Panel
 from rich.table import Table
 
 from arc.cli.utils import ArcConsole, CLIState, RunResult, format_error, format_success, format_warning
+from arc.cli.utils import db_manager, HybridState
+from arc.cli.utils.error_helpers import categorize_error
 from arc.ingestion.parser import AgentConfigParser
 from arc.ingestion.normalizer import ConfigNormalizer
 from arc.scenarios.generator import ScenarioGenerator
@@ -22,7 +24,25 @@ from arc.core.models.scenario import Scenario
 
 
 console = ArcConsole()
-state = CLIState()
+# Will be initialized with database connection if available
+state = None
+
+
+async def _initialize_state():
+    """Initialize state with database connection if available."""
+    global state
+
+    # Try to initialize database connection
+    db_connected = await db_manager.initialize()
+
+    if db_connected:
+        # Use hybrid state with database
+        state = HybridState(db_connected=True)
+    else:
+        # Fall back to file-only state
+        state = CLIState()
+
+    return db_connected
 
 
 @click.command()
@@ -43,6 +63,9 @@ def run(config_path: str, scenarios: int, json_output: bool, no_confirm: bool, p
     Example:
         arc run finance_agent_v1.yaml
     """
+    # Initialize state with database connection
+    asyncio.run(_initialize_state())
+    
     config_path = Path(config_path)
     run_id = f"run_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid4().hex[:8]}"
     
@@ -475,16 +498,36 @@ def _execute_with_modal(
                     continue
                 
                 for result in batch_results:
+                    # Extract data from Modal result structure
+                    scenario = result.get("scenario", {})
+                    trajectory = result.get("trajectory", {})
+                    reliability_score = result.get("reliability_score", {})
+                    detailed_trajectory = result.get("detailed_trajectory", {})
+
+                    # Calculate cost from token usage
+                    token_usage = trajectory.get("token_usage", {})
+                    cost = token_usage.get("total_cost", 0.0)
+
+                    # Determine success based on reliability score
+                    success = reliability_score.get("overall_score", 0) >= 0.7
+
+                    # Get Modal execution ID if available
+                    modal_call_id = os.environ.get("MODAL_FUNCTION_CALL_ID")
                     results.append({
-                        "scenario_id": result.get("scenario_id"),
-                        "success": result.get("success", False),
-                        "execution_time": result.get("execution_time_ms", 0) / 1000,
-                        "failure_reason": result.get("failure_reason"),
-                        "tool_calls": result.get("tool_calls", []),
-                        "cost": result.get("cost", 0)
+                        "scenario_id": scenario.get("id", f"scenario_{result.get('scenario_index', 0)}"),
+                        "success": success,
+                        "execution_time": trajectory.get("execution_time_seconds", 0),
+                        "failure_reason": trajectory.get("final_response") if trajectory.get("status") == "error" else None,
+                        "tool_calls": [event for event in trajectory.get("full_trajectory", []) if event.get("type") == "tool_call"],
+                        "cost": cost,
+                        "tokens_used": token_usage.get("total_tokens", 0),
+                        "trajectory": detailed_trajectory,
+                        "reliability_score": reliability_score.get("overall_score", 0),
+                        "modal_call_id": modal_call_id,
+                        "error_category": categorize_error(trajectory.get("final_response")) if trajectory.get("status") == "error" else None
                     })
-                    total_cost += result.get("cost", 0)
-                    progress.update(task, advance=len(batch))
+                    total_cost += cost
+                    progress.update(task, advance=1)
     else:
         # Silent execution for JSON output
         try:
@@ -505,15 +548,35 @@ def _execute_with_modal(
             return results, execution_time, 0.0
         
         for result in modal_results:
+            # Extract data from Modal result structure
+            scenario = result.get("scenario", {})
+            trajectory = result.get("trajectory", {})
+            reliability_score = result.get("reliability_score", {})
+            detailed_trajectory = result.get("detailed_trajectory", {})
+
+            # Calculate cost from token usage
+            token_usage = trajectory.get("token_usage", {})
+            cost = token_usage.get("total_cost", 0.0)
+
+            # Determine success based on reliability score
+            success = reliability_score.get("overall_score", 0) >= 0.7
+
+            # Get Modal execution ID if available
+            modal_call_id = os.environ.get("MODAL_FUNCTION_CALL_ID")
             results.append({
-                "scenario_id": result.get("scenario_id"),
-                "success": result.get("success", False),
-                "execution_time": result.get("execution_time_ms", 0) / 1000,
-                "failure_reason": result.get("failure_reason"),
-                "tool_calls": result.get("tool_calls", []),
-                "cost": result.get("cost", 0)
+                "scenario_id": scenario.get("id", f"scenario_{result.get('scenario_index', 0)}"),
+                "success": success,
+                "execution_time": trajectory.get("execution_time_seconds", 0),
+                "failure_reason": trajectory.get("final_response") if trajectory.get("status") == "error" else None,
+                "tool_calls": [event for event in trajectory.get("full_trajectory", []) if event.get("type") == "tool_call"],
+                "cost": cost,
+                "tokens_used": token_usage.get("total_tokens", 0),
+                "trajectory": detailed_trajectory,
+                "reliability_score": reliability_score.get("overall_score", 0),
+                "modal_call_id": modal_call_id,
+                "error_category": categorize_error(trajectory.get("final_response")) if trajectory.get("status") == "error" else None
             })
-            total_cost += result.get("cost", 0)
+            total_cost += cost
     
     execution_time = time.time() - start_time
     return results, execution_time, total_cost

@@ -8,7 +8,7 @@ from uuid import uuid4
 
 from arc.cli.utils.state import CLIState, RunResult
 from arc.cli.utils.console import ArcConsole
-from arc.database.client import ArcDBClient
+from arc.cli.utils.db_connection import db_manager
 
 console = ArcConsole()
 
@@ -16,15 +16,14 @@ console = ArcConsole()
 class HybridState(CLIState):
     """State manager that writes to both file and database storage."""
     
-    def __init__(self, db_client: Optional[ArcDBClient] = None):
+    def __init__(self, db_connected: bool = False):
         """Initialize hybrid state manager.
         
         Args:
-            db_client: Optional database client for persistence
+            db_connected: Whether database is connected
         """
         super().__init__()
-        self.db_client = db_client
-        self.use_db = db_client is not None
+        self.db_connected = db_connected
         self._user_id = self._get_or_create_user_id()
     
     def _get_or_create_user_id(self) -> str:
@@ -50,7 +49,7 @@ class HybridState(CLIState):
         run_dir = super().save_run(result)
         
         # Also save to database if available
-        if self.use_db and self.db_client:
+        if self.db_connected:
             try:
                 await self._save_to_database(result)
             except Exception as e:
@@ -67,62 +66,58 @@ class HybridState(CLIState):
         Args:
             result: Run result to save
         """
-        # Create configuration if not exists
-        config_name = Path(result.config_path).stem
-        config_id = await self.db_client.create_configuration(
-            name=config_name,
-            user_id=self._user_id,
-            initial_config={"path": result.config_path}  # Simplified for now
-        )
-        
-        # Create config version
-        version_id = await self.db_client.create_config_version(
-            configuration_id=config_id,
-            version_tag=f"v_{datetime.now().strftime('%Y%m%d_%H%M%S')}",
-            config_content={"path": result.config_path},
-            change_description="Run execution"
-        )
-        
-        # Create simulation record
-        simulation_id = await self.db_client.create_simulation(
-            config_version_id=version_id,
-            scenario_set=[s.get("scenario_id", f"scenario_{i}") 
-                         for i, s in enumerate(result.scenarios)],
-            simulation_name=result.run_id,
-            simulation_type="evaluation",
-            status="completed",
-            overall_score=result.reliability_score,
-            total_cost_usd=result.total_cost,
-            metadata={
-                "scenario_count": result.scenario_count,
-                "success_count": result.success_count,
-                "failure_count": result.failure_count,
-                "execution_time": result.execution_time
-            }
-        )
-        
-        # Save outcomes in batch
-        if result.results:
-            outcomes = []
-            for r in result.results:
-                outcome = {
-                    "simulation_id": simulation_id,
-                    "scenario_id": r.get("scenario_id", "unknown"),
-                    "status": "success" if r.get("success") else "error",
-                    "reliability_score": 1.0 if r.get("success") else 0.0,
-                    "execution_time_ms": int(r.get("execution_time", 0) * 1000),
-                    "tokens_used": r.get("tokens_used", 0),
-                    "cost_usd": r.get("cost", 0.0),
-                    "trajectory": r.get("trajectory", {}),
-                    "modal_call_id": r.get("modal_call_id"),
-                    "error_code": r.get("error_code"),
-                    "error_category": self._categorize_error(r.get("failure_reason"))
-                }
-                outcomes.append(outcome)
+        async with db_manager.get_client() as db_client:
+            if not db_client:
+                return
+                
+            # Create configuration if not exists
+            config_name = Path(result.config_path).stem
+            config_id = await db_client.create_configuration(
+                name=config_name,
+                user_id=self._user_id,
+                initial_config={"path": result.config_path}  # Simplified for now
+            )
             
-            await self.db_client.record_outcomes_batch(outcomes)
-        
-        console.print(f"Run {result.run_id} saved to database", style="success")
+            # Create simulation record
+            simulation_id = await db_client.create_simulation(
+                config_version_id=config_id,  # Using config_id directly for now
+                scenario_set=[s.get("scenario_id", f"scenario_{i}") 
+                             for i, s in enumerate(result.scenarios)],
+                simulation_name=result.run_id,
+                simulation_type="evaluation",
+                status="completed",
+                overall_score=result.reliability_score,
+                total_cost_usd=result.total_cost,
+                metadata={
+                    "scenario_count": result.scenario_count,
+                    "success_count": result.success_count,
+                    "failure_count": result.failure_count,
+                    "execution_time": result.execution_time
+                }
+            )
+            
+            # Save outcomes in batch
+            if result.results:
+                outcomes = []
+                for r in result.results:
+                    outcome = {
+                        "simulation_id": simulation_id,
+                        "scenario_id": r.get("scenario_id", "unknown"),
+                        "status": "success" if r.get("success") else "error",
+                        "reliability_score": r.get("reliability_score", 1.0 if r.get("success") else 0.0),
+                        "execution_time_ms": int(r.get("execution_time", 0) * 1000),
+                        "tokens_used": r.get("tokens_used", 0),
+                        "cost_usd": r.get("cost", 0.0),
+                        "trajectory": r.get("trajectory", {}),
+                        "modal_call_id": r.get("modal_call_id"),
+                        "error_code": r.get("error_code"),
+                        "error_category": self._categorize_error(r.get("failure_reason"))
+                    }
+                    outcomes.append(outcome)
+                
+                await db_client.record_outcomes_batch(outcomes)
+            
+            console.print(f"Run {result.run_id} saved to database", style="success")
     
     def _categorize_error(self, failure_reason: Optional[str]) -> Optional[str]:
         """Categorize error based on failure reason.
@@ -161,7 +156,7 @@ class HybridState(CLIState):
         run_dir = super().save_run(result)
         
         # Then try to save to database if available
-        if self.use_db and self.db_client:
+        if self.db_connected:
             try:
                 # Run async operation in sync context
                 loop = asyncio.new_event_loop()

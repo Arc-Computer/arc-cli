@@ -1,4 +1,4 @@
--- TimescaleDB Optimizations for Arc-Eval Platform
+-- TimescaleDB Optimizations for Arc Platform
 -- Hypertables, Indexes, Compression, and Continuous Aggregates
 
 -- ============================================================================

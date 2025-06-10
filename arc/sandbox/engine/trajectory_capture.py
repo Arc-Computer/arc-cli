@@ -1,5 +1,5 @@
 """
-Trajectory Capture and Serialization for Arc-Eval Production
+Trajectory Capture and Serialization for Arc Production
 Production version adapted from experiments/src/tracing/trajectory_capture.py
 """
 
@@ -133,7 +133,7 @@ class TrajectoryCapture:
         
         # Set up tracing
         resource = Resource.create({
-            "service.name": "arc-eval-production",
+            "service.name": "arc-production",
             "service.version": "1.0.0",
             "deployment.environment": "production"
         })
@@ -145,7 +145,7 @@ class TrajectoryCapture:
         provider.add_span_processor(BatchSpanProcessor(exporter))
         
         trace.set_tracer_provider(provider)
-        self.tracer = trace.get_tracer("arc-eval.trajectory", "1.0.0")
+        self.tracer = trace.get_tracer("arc.trajectory", "1.0.0")
         
         # Storage for trajectory events
         self.tool_calls = []

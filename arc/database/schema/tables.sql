@@ -1,4 +1,4 @@
--- TimescaleDB Schema for Arc-Eval Platform
+-- TimescaleDB Schema for Arc Platform
 -- Generated from docs/db/DATABASE.md
 -- Optimized for time-series workloads and Modal sandbox integration
 

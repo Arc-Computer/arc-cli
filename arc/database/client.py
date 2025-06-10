@@ -476,7 +476,7 @@ class ArcDBClient:
                 "config_hash": config_hash
             })
         
-        return config_id
+        return version_id
     
     # Simulation Management
     async def create_simulation(self, config_version_id: str, scenario_set: List[str],
@@ -550,6 +550,15 @@ class ArcDBClient:
         """Record individual scenario outcome to TimescaleDB hypertable."""
         outcome_id = str(uuid.uuid4())
         
+        # Ensure trajectory meets database constraint requirements
+        trajectory = outcome_data["trajectory"]
+        if isinstance(trajectory, dict):
+            # Add required fields if missing
+            if "start_time" not in trajectory:
+                trajectory["start_time"] = outcome_data.get("execution_time", datetime.utcnow()).isoformat()
+            if "status" not in trajectory:
+                trajectory["status"] = outcome_data["status"]
+        
         async with self.engine.begin() as conn:
             await conn.execute(text("""
                 INSERT INTO outcomes (
@@ -573,7 +582,7 @@ class ArcDBClient:
                 "execution_time_ms": outcome_data["execution_time_ms"],
                 "tokens_used": outcome_data["tokens_used"],
                 "cost_usd": outcome_data["cost_usd"],
-                "trajectory": json.dumps(outcome_data["trajectory"]),
+                "trajectory": json.dumps(trajectory),
                 "modal_call_id": outcome_data.get("modal_call_id"),
                 "sandbox_id": outcome_data.get("sandbox_id"),
                 "error_code": outcome_data.get("error_code"),

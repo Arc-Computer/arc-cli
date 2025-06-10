@@ -383,9 +383,10 @@ def evaluate_single_scenario(
                 "execution_time_seconds": execution_time
             })
             
-            # Create trajectory result with proper token tracking
+            # Create trajectory result with proper token tracking and REQUIRED database fields
             trajectory = {
-                "status": "success",
+                "start_time": start_time.isoformat(),  # REQUIRED by database constraint
+                "status": "success",  # REQUIRED by database constraint
                 "task_prompt": scenario["task_prompt"],
                 "final_response": result.get("output", ""),
                 "trajectory_event_count": len(trajectory_events),
@@ -404,7 +405,8 @@ def evaluate_single_scenario(
         except Exception as e:
             print(f"[CONTAINER-{scenario_index}] Error in scenario: {str(e)}")
             trajectory = {
-                "status": "error",
+                "start_time": start_time.isoformat(),  # REQUIRED by database constraint
+                "status": "error",  # REQUIRED by database constraint
                 "task_prompt": scenario["task_prompt"],
                 "final_response": f"Error: {str(e)}",
                 "trajectory_event_count": 0,
@@ -502,7 +504,8 @@ def run_evaluation_suite_parallel(
             error_result = {
                 "scenario": scenario,
                 "trajectory": {
-                    "status": "error",
+                    "start_time": datetime.now().isoformat(),  # REQUIRED by database constraint
+                    "status": "error",  # REQUIRED by database constraint
                     "task_prompt": scenario["task_prompt"],
                     "final_response": f"Execution error: {str(result)}",
                     "trajectory_event_count": 0,

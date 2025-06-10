@@ -119,9 +119,7 @@ def get_engine(dsn: str | None = None) -> AsyncEngine:
                 "server_settings": {
                     "jit": "off",  # Recommended for analytical workloads
                     "timezone": "UTC"
-                },
-                "command_timeout": 60,  # 60 second timeout for commands
-                "prepared_statement_cache_size": 0,  # Disable prepared statements for better compatibility
+                }
             }
         )
         

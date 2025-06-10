@@ -6,7 +6,7 @@ Scores scenarios based on: specific errors (2pts), edge cases (2pts), multi-tool
 
 import json
 import hashlib
-from typing import List, Dict, Any, Tuple, Optional
+from typing import List, Dict, Any, Tuple, Optional, Union
 from dataclasses import dataclass
 from collections import Counter
 try:
@@ -15,6 +15,8 @@ try:
 except ImportError:
     HAS_LEVENSHTEIN = False
     print("Warning: python-Levenshtein not installed. Using simple string comparison for novelty scoring.")
+
+from ..core.models.scenario import Scenario
 
 
 @dataclass
@@ -27,6 +29,18 @@ class QualityMetrics:
     total_score: float
     passed_threshold: bool
     rejection_reason: Optional[str] = None
+    
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert to dictionary."""
+        return {
+            "specific_error": self.specific_error_score,
+            "edge_cases": self.edge_case_score,
+            "multi_tool": self.multi_tool_score,
+            "novelty": self.novelty_score,
+            "total": self.total_score,
+            "passed": self.passed_threshold,
+            "rejection_reason": self.rejection_reason
+        }
 
 
 class ScenarioQualityScorer:
@@ -54,14 +68,21 @@ class ScenarioQualityScorer:
             "raises", "encounters", "experiences", "suffers from"
         ]
     
-    def score_scenario(self, scenario: Dict[str, Any]) -> QualityMetrics:
+    def score_scenario(self, scenario: Union[Scenario, Dict[str, Any]]) -> QualityMetrics:
         """Score a single scenario"""
         
-        # Extract scenario components
-        task_prompt = scenario.get('task_prompt', '')
-        expected_tools = scenario.get('expected_tools', [])
-        expected_error = scenario.get('expected_error', '') or scenario.get('potential_failure_mode', '')
-        metadata = scenario.get('metadata', {})
+        # Extract scenario components based on type
+        if isinstance(scenario, Scenario):
+            task_prompt = scenario.task_prompt
+            expected_tools = scenario.expected_tools
+            expected_error = scenario.potential_failure_mode or scenario.expected_error
+            metadata = scenario.model_dump().get('metadata', {})
+        else:
+            # Dictionary format
+            task_prompt = scenario.get('task_prompt', '') or scenario.get('task', '')
+            expected_tools = scenario.get('expected_tools', []) or scenario.get('tools', [])
+            expected_error = scenario.get('expected_error', '') or scenario.get('expected_behavior', '') or scenario.get('potential_failure_mode', '')
+            metadata = scenario.get('metadata', {})
         
         # Calculate individual scores
         specific_error_score = self._score_specific_error(expected_error)

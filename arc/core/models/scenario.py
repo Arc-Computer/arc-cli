@@ -34,8 +34,14 @@ class Scenario(BaseModel):
     pattern_id: Optional[str] = Field(default=None, description="Source pattern ID if pattern-based")
     quality_score: Optional[float] = Field(default=None, description="Quality score")
     
+    # Tags for categorization
+    tags: List[str] = Field(default_factory=list, description="Tags for scenario categorization")
+    
     # Success criteria
     success_criteria: Dict[str, Any] = Field(default_factory=dict, description="Success evaluation criteria")
+    
+    # Additional metadata
+    metadata: Dict[str, Any] = Field(default_factory=dict, description="Additional metadata")
     
     # Timestamps
     created_at: datetime = Field(default_factory=datetime.now)

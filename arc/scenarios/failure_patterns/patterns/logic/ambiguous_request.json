@@ -1,0 +1,20 @@
+{
+  "id": "ambiguous_request",
+  "title": "Ambiguous User Intent",
+  "category": "logic",
+  "severity": "low",
+  "trigger_conditions": [
+    "multiple valid interpretations",
+    "missing context",
+    "unclear references"
+  ],
+  "expected_error": "Ambiguous request requires clarification",
+  "recovery_patterns": [
+    "clarification questions",
+    "context inference",
+    "default assumptions"
+  ],
+  "frequency": "very_common",
+  "description": "User request can be interpreted multiple valid ways",
+  "example_instantiation": "Find 'Apple' products without specifying fruit or technology"
+}

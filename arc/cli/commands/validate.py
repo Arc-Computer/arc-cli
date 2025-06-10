@@ -1,9 +1,8 @@
 """Arc validate command - validate agent configuration."""
 
 import click
-from pathlib import Path
 
-from arc.cli.utils import ArcConsole, format_error, format_success
+from arc.cli.utils import ArcConsole
 from arc.cli_validate import validate as validate_config
 
 console = ArcConsole()

@@ -37,7 +37,7 @@ def analyze(run_id: Optional[str], json_output: bool):
                 print(json.dumps({"error": "No run found"}, indent=2))
             else:
                 console.print(format_error("No run found. Run 'arc run' first."))
-            raise click.Exit(1)
+            raise click.exceptions.Exit(1)
         
         # Perform analysis
         failures = run_result.failures
@@ -114,7 +114,7 @@ def analyze(run_id: Optional[str], json_output: bool):
             print(json.dumps({"error": str(e)}, indent=2))
         else:
             console.print(format_error(f"Analysis failed: {str(e)}"))
-        raise click.Exit(1)
+        raise click.exceptions.Exit(1)
 
 
 def _cluster_failures(failures: List[Dict]) -> List[Dict]:

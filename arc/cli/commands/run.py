@@ -5,7 +5,7 @@ import os
 import time
 from datetime import datetime
 from pathlib import Path
-from typing import Optional, List, Dict, Any
+from typing import Optional, Any
 from uuid import uuid4
 
 import click
@@ -193,16 +193,16 @@ def run(config_path: str, scenarios: int, json_output: bool, no_confirm: bool, p
         else:
             console.print(format_error(f"Run failed: {str(e)}"))
             console.print("\nTry: [info]arc validate {config_path}[/info] to check your configuration", style="muted")
-        raise click.Exit(1)
+        raise click.exceptions.Exit(1)
 
 
 async def _generate_scenarios_async(
     config_path: str,
     count: int,
     pattern_ratio: float,
-    capabilities: Dict[str, Any],
+    capabilities: dict[str, Any],
     json_output: bool
-) -> List[Scenario]:
+) -> list[Scenario]:
     """Generate scenarios asynchronously."""
     try:
         # Check if finance domain for currency scenarios
@@ -277,7 +277,7 @@ def _estimate_cost(scenario_count: int, model: str) -> float:
     return scenario_count * base_cost
 
 
-def _print_scenario_summary(scenarios: List[Any]) -> None:
+def _print_scenario_summary(scenarios: list[Any]) -> None:
     """Print summary of generated scenarios."""
     # Count by domain
     domains = {}
@@ -291,7 +291,7 @@ def _print_scenario_summary(scenarios: List[Any]) -> None:
             console.print(f"  {domain}: {count} scenarios", style="muted")
 
 
-def _simulate_execution(scenarios: List[Any], json_output: bool) -> tuple[List[Dict[str, Any]], float]:
+def _simulate_execution(scenarios: list[Any], json_output: bool) -> tuple[list[dict[str, Any]], float]:
     """Simulate scenario execution with mock results."""
     results = []
     start_time = time.time()
@@ -353,10 +353,10 @@ def _check_modal_available() -> bool:
 
 
 def _execute_with_modal(
-    scenarios: List[Scenario],
-    agent_config: Dict[str, Any],
+    scenarios: list[Scenario],
+    agent_config: dict[str, Any],
     json_output: bool
-) -> tuple[List[Dict[str, Any]], float, float]:
+) -> tuple[list[dict[str, Any]], float, float]:
     """Execute scenarios using Modal sandbox.
     
     Returns:
@@ -415,8 +415,23 @@ def _execute_with_modal(
                 batch = scenario_tuples[i:i+batch_size]
                 
                 # Execute batch on Modal
-                with modal_app.run():
-                    batch_results = list(evaluate_single_scenario.map(batch))
+                try:
+                    with modal_app.run():
+                        batch_results = list(evaluate_single_scenario.map(batch))
+                except Exception as e:
+                    console.print(format_warning(f"Modal execution error for batch {i//batch_size + 1}: {str(e)}"))
+                    # Create error results for failed batch
+                    for scenario_tuple in batch:
+                        results.append({
+                            "scenario_id": f"scenario_{scenario_tuple[2]}",
+                            "success": False,
+                            "execution_time": 0,
+                            "failure_reason": f"Modal execution error: {str(e)}",
+                            "tool_calls": [],
+                            "cost": 0
+                        })
+                    progress.update(task, advance=len(batch))
+                    continue
                 
                 for result in batch_results:
                     results.append({
@@ -431,8 +446,22 @@ def _execute_with_modal(
                     progress.update(task, advance=len(batch))
     else:
         # Silent execution for JSON output
-        with modal_app.run():
-            modal_results = list(evaluate_single_scenario.map(scenario_tuples))
+        try:
+            with modal_app.run():
+                modal_results = list(evaluate_single_scenario.map(scenario_tuples))
+        except Exception as e:
+            # Return error results for all scenarios
+            for i, scenario_tuple in enumerate(scenario_tuples):
+                results.append({
+                    "scenario_id": f"scenario_{i}",
+                    "success": False,
+                    "execution_time": 0,
+                    "failure_reason": f"Modal execution error: {str(e)}",
+                    "tool_calls": [],
+                    "cost": 0
+                })
+            execution_time = time.time() - start_time
+            return results, execution_time, 0.0
         
         for result in modal_results:
             results.append({

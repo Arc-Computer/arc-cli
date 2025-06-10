@@ -38,7 +38,7 @@ def recommend(run_id: Optional[str], json_output: bool):
                 print(json.dumps({"error": "No run found"}, indent=2))
             else:
                 console.print(format_error("No run found. Run 'arc run' first."))
-            raise click.Exit(1)
+            raise click.exceptions.Exit(1)
         
         # Check if analysis exists
         if not run_result.analysis:
@@ -47,7 +47,7 @@ def recommend(run_id: Optional[str], json_output: bool):
                 print(json.dumps({"error": "No analysis found. Run 'arc analyze' first."}, indent=2))
             else:
                 console.print(format_error("No analysis found. Run 'arc analyze' first."))
-            raise click.Exit(1)
+            raise click.exceptions.Exit(1)
         
         # Generate recommendations
         recommendations = _generate_recommendations(run_result)

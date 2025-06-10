@@ -5,7 +5,7 @@ from .state import CLIState, RunResult
 
 __all__ = [
     "ArcConsole",
-    "format_error", 
+    "format_error",
     "format_success",
     "format_warning",
     "CLIState",

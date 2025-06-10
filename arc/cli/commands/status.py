@@ -123,7 +123,7 @@ def status(limit: int, json_output: bool):
             print(json.dumps({"error": str(e)}, indent=2))
         else:
             console.print(format_error(f"Status check failed: {str(e)}"))
-        raise click.Exit(1)
+        raise click.exceptions.Exit(1)
 
 
 def _format_time_ago(timestamp: datetime) -> str:

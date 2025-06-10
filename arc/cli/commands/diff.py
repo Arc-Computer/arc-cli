@@ -198,7 +198,7 @@ def diff(config1: str, config2: str, scenarios: int, json_output: bool):
             print(json.dumps({"error": str(e)}, indent=2))
         else:
             console.print(format_error(f"Comparison failed: {str(e)}"))
-        raise click.Exit(1)
+        raise click.exceptions.Exit(1)
 
 
 def _perform_statistical_analysis(results_a: list, results_b: list) -> Dict[str, Any]:

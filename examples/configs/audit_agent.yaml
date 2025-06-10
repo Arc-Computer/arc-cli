@@ -1,6 +1,6 @@
 # audit_agent.yaml
-# Financial Audit & Compliance Agent
-# Represents a different finance domain for testing variety
+# Example: Financial Audit & Compliance Agent
+# Demonstrates Arc's applicability across different finance domains
 # Focuses on regulatory compliance and audit trail verification
 
 model: "gpt-4.1"

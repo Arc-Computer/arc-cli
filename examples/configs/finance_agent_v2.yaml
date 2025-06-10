@@ -1,7 +1,7 @@
 # finance_agent_v2.yaml
-# Improved Finance Agent - Multi-Currency Protocol Implementation
-# This version properly handles multiple currencies with explicit validation
-# Represents mature implementation after learning from production failures
+# Example: Enhanced Finance Agent with Multi-Currency Support
+# This version demonstrates proper handling of multiple currencies
+# with explicit validation and comprehensive audit trails
 
 model: "gpt-4.1"
 temperature: 0.1
@@ -13,7 +13,7 @@ job: "Process multi-currency financial data and generate reports for global corp
 
 # Updated assumptions - addressing the currency bug
 assumptions:
-  - "Currency must be explicitly identified for all monetary values"  # FIX: No default assumption
+  - "Currency must be explicitly identified for all monetary values"  # Best practice: No default assumption
   - "Spreadsheet data may use various international formats"
   - "Dates may be in MM/DD/YYYY, DD/MM/YYYY, or ISO format"
   - "Decimal separators vary by locale (. or ,)"
@@ -139,9 +139,9 @@ validation_rules:
   - "Ambiguous currencies must be flagged for review"
   - "Exchange rate sources must be documented"
 
-# Success metrics for currency handling
-currency_handling_metrics:
-  - "Zero currency assumption errors"
-  - "100% currency identification accuracy"
-  - "Full audit trail for all conversions"
-  - "Automatic format detection success > 95%"
+# Goals for currency handling
+currency_handling_goals:
+  - "Eliminate currency assumption errors"
+  - "Accurate currency identification"
+  - "Complete audit trail for all conversions"
+  - "Reliable automatic format detection"

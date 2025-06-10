@@ -1,14 +1,16 @@
-# Agent Configuration Documentation
+# Example Agent Configurations
 
-This directory contains realistic finance agent configurations designed to demonstrate Arc's "Proactive Capability Assurance" by identifying and fixing agent failures before production deployment.
+This directory contains example agent configurations for Arc-CLI. These realistic finance agents demonstrate how Arc can identify and fix potential issues before production deployment.
+
+**Note**: The `arc/config/` directory contains Arc's internal configuration files (development.py, production.py, etc.), while this `examples/configs/` directory contains example agent configurations for users to reference.
 
 ## Overview
 
-The configurations represent a real-world progression from a flawed implementation to a robust, production-ready system. They drive the entire Arc evaluation pipeline to demonstrate a concrete improvement from 73% to 91% reliability.
+The configurations represent a real-world progression from a basic implementation to a more robust system. They serve as both examples for users and test cases for Arc's evaluation pipeline.
 
 ## Configurations
 
-### 1. finance_agent_v1.yaml - Baseline with Currency Bug (73% Reliability)
+### 1. finance_agent_v1.yaml - Basic Finance Agent
 
 **Real-World Context**: This represents a common implementation pattern where US-based developers create finance agents with implicit USD assumptions. Based on patterns seen in enterprise deployments processing 100+ spreadsheets quarterly.
 
@@ -23,12 +25,12 @@ The configurations represent a real-world progression from a flawed implementati
 - Multi-currency consolidations (all currencies treated as USD)
 - Exchange rate calculations (ignored entirely)
 
-**Business Impact**: 
-- Average $35K+ monthly losses from currency conversion errors
-- 15 failures per 50 scenarios in multi-national contexts
-- Manual intervention required for each currency mismatch
+**Common Impact**: 
+- Currency conversion errors in multi-national contexts
+- Manual intervention required for currency mismatches
+- Time-consuming debugging when assumptions fail
 
-### 2. finance_agent_v2.yaml - Fixed with Multi-Currency Protocol (91% Reliability)
+### 2. finance_agent_v2.yaml - Enhanced Multi-Currency Finance Agent
 
 **Improvements Implemented**:
 - ✅ "Currency must be explicitly identified for all monetary values" - **THE FIX**
@@ -43,11 +45,11 @@ The configurations represent a real-world progression from a flawed implementati
 - Enhanced `financial_calculator` with currency awareness
 - Locale-aware formatting detection
 
-**Success Metrics**:
-- 18 percentage point reliability improvement
+**Improvements**:
 - Zero currency assumption errors
-- 98.7% cost reduction vs. manual fixes
-- Full compliance with FASB 52 requirements
+- Reduced need for manual fixes
+- Better compliance with international accounting standards
+- Clear audit trails for all conversions
 
 ### 3. audit_agent.yaml - Different Finance Domain
 
@@ -103,28 +105,28 @@ These configurations integrate with:
    - "Format misinterpretation cluster"
    - "Missing exchange rate cluster"
 
-4. **A/B Testing** (Issue #25): Statistical validation of improvement:
-   - 73% → 91% reliability increase
-   - p < 0.001 significance
-   - Effect size: 1.2 (large)
+4. **A/B Testing** (Issue #25): Statistical validation framework:
+   - Compares baseline vs improved configurations
+   - Provides statistical significance testing
+   - Measures effect size of improvements
 
-## Business Value Demonstration
+## Expected Value
 
-**For the Friday Demo**:
-- **Before (v1)**: Manual currency fixes cost $35K+/month in finance team hours
-- **After (v2)**: Automated handling reduces errors by 94%
-- **ROI**: Testing cost of $0.02 vs. incident prevention of $35K+
-- **Time to Insight**: 45 seconds to identify the systematic currency bug
+These configurations help demonstrate:
+- **Before (v1)**: How implicit assumptions can cause systematic failures
+- **After (v2)**: How explicit validation and proper handling prevent issues
+- **Quick Identification**: Arc can quickly identify patterns in agent failures
+- **Actionable Insights**: Clear recommendations for improving agent reliability
 
 ## Usage
 
 ```bash
-# Demo workflow
-arc run configs/finance_agent_v1.yaml  # Shows 73% reliability
-arc analyze                             # Identifies currency assumption cluster
-arc recommend                           # Suggests multi-currency protocol
+# Example workflow
+arc run examples/configs/finance_agent_v1.yaml  # Run baseline agent
+arc analyze                                      # Analyze failures
+arc recommend                                    # Get improvement suggestions
 arc validate-improvement finance_agent_v1.yaml finance_agent_v2.yaml
-arc run configs/finance_agent_v2.yaml  # Shows 91% reliability
+arc run examples/configs/finance_agent_v2.yaml  # Run improved agent
 ```
 
 ## Conclusion

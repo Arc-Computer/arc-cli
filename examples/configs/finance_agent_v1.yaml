@@ -1,7 +1,7 @@
 # finance_agent_v1.yaml
-# Baseline Finance Agent - Contains USD Currency Assumption Bug
-# This represents a common real-world implementation where developers
-# implicitly assume USD for all financial calculations
+# Example: Basic Finance Agent with Implicit Currency Assumptions
+# This represents a common implementation pattern where developers
+# make implicit assumptions about currency in financial calculations
 
 model: "gpt-4.1"
 temperature: 0.1
@@ -13,7 +13,7 @@ job: "Process financial data and generate reports for corporate finance teams"
 
 # Documented assumptions - these drive our test scenarios
 assumptions:
-  - "All financial amounts are in USD unless explicitly stated"  # BUG: This assumption will fail
+  - "All financial amounts are in USD unless explicitly stated"  # Note: This assumption may cause issues
   - "Spreadsheet data follows standard US accounting formats"
   - "Dates are in MM/DD/YYYY format"
   - "Decimal separator is period (.)"
@@ -91,6 +91,5 @@ compliance:
   - "Data encryption for sensitive financial information"
   - "Audit trail maintenance"
 
-# Known limitations (not documented to users - represents oversight)
-# The agent assumes USD for all calculations without explicit validation
-# This will cause failures when processing EUR, GBP, JPY, or other currencies
+# Example limitation: The implicit USD assumption may cause issues
+# when processing international financial data with multiple currencies

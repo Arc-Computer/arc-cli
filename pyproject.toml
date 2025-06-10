@@ -146,18 +146,24 @@ disallow_untyped_defs = true
 
 [tool.pytest.ini_options]
 minversion = "7.0"
-testpaths = ["tests"]
+testpaths = ["tests", "arc/tests"]
 python_files = "test_*.py"
 python_classes = "Test*"
 python_functions = "test_*"
 addopts = [
     "--strict-markers",
     "--tb=short",
-    "--cov=arc",
-    "--cov-report=term-missing",
-    "--cov-report=html",
-    "--cov-report=xml",
 ]
+asyncio_default_fixture_loop_scope = "function"
+# Coverage options - uncomment if pytest-cov is installed
+# addopts = [
+#     "--strict-markers",
+#     "--tb=short",
+#     "--cov=arc",
+#     "--cov-report=term-missing",
+#     "--cov-report=html",
+#     "--cov-report=xml",
+# ]
 
 [tool.coverage.run]
 source = ["arc"]

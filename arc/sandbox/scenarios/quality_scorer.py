@@ -1,1 +1,0 @@
-"""Scenario quality scoring scaffold."""

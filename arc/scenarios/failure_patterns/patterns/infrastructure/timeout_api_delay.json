@@ -1,0 +1,20 @@
+{
+  "id": "timeout_api_delay",
+  "title": "API Response Timeout - Slow Response",
+  "category": "infrastructure",
+  "severity": "medium",
+  "trigger_conditions": [
+    "response_time > 5s",
+    "network congestion",
+    "cold start delays"
+  ],
+  "expected_error": "Request timeout after 5000ms",
+  "recovery_patterns": [
+    "retry with exponential backoff",
+    "graceful degradation",
+    "cached response fallback"
+  ],
+  "frequency": "common",
+  "description": "Tool API responds slower than agent timeout threshold, causing premature abandonment",
+  "example_instantiation": "Get weather for 'San Francisco' when the weather API experiences 6-second response delays"
+}

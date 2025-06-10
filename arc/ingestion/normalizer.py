@@ -54,7 +54,7 @@ class ConfigNormalizer:
         model_mappings = {
             # OpenAI
             "gpt-4": "openai/gpt-4.1",
-            "gpt4": "openai/gpt-4.1",
+            "gpt4.1": "openai/gpt-4.1",
             "gpt-4.1": "openai/gpt-4.1",
             "gpt-4-turbo": "openai/gpt-4.1",
             "gpt-4o": "openai/gpt-4.1",

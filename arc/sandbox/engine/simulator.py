@@ -37,7 +37,7 @@ arc_image = (
         "numpy",
         "scikit-learn"
     )
-    # Copy the production arc directory to Modal
+    # Modal 1.0: Use add_local_dir for production arc directory
     .add_local_dir(
         os.path.join(project_root, "arc"),
         "/root/arc"
@@ -215,10 +215,10 @@ def search_database(query: str, table: str, trajectory_capture=None) -> str:
     image=arc_image,
     secrets=[modal.Secret.from_name("openai-secret")],
     timeout=300,
-    # Autoscaling configuration for parallel execution
-    max_containers=50,  # Allow up to 50 parallel containers
-    buffer_containers=5,  # Keep 5 warm containers ready
-    scaledown_window=60  # Keep containers alive for 60s when idle
+    # Modal 1.0: Updated autoscaler parameters
+    min_containers=1,      # Keep at least 1 container warm (was buffer_containers)
+    max_containers=50,     # Allow up to 50 parallel containers
+    scaledown_window=60    # Keep containers alive for 60s when idle
 )
 @modal.concurrent(max_inputs=10, target_inputs=8)  # Allow concurrent LLM calls within container
 def evaluate_single_scenario(

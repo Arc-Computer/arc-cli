@@ -265,47 +265,49 @@ async def _generate_scenarios_async(
 
 def _estimate_cost(scenario_count: int, model: str) -> float:
     """Estimate cost for running scenarios."""
-    # Comprehensive model pricing (per scenario estimate based on ~1500 tokens)
-    # Pricing includes both input and output tokens
-    cost_per_scenario = {
+    # Model pricing from experiments/generation/generator.py
+    # Estimated cost per scenario based on ~1500 tokens (1k input, 0.5k output)
+    # Using the token pricing to calculate per-scenario cost
+    MODELS_PRICING = {
         # OpenAI
-        "openai/gpt-4.1": 0.0010,
-        "openai/gpt-4.1-mini": 0.0002,
-        "openai/gpt-4o": 0.0008,
-        "openai/gpt-4o-mini": 0.0001,
-        "openai/gpt-3.5-turbo": 0.00015,
+        "openai/gpt-4.1": {"cost_per_1k_in": 0.00200, "cost_per_1k_out": 0.00800},
+        "openai/gpt-4.1-mini": {"cost_per_1k_in": 0.00040, "cost_per_1k_out": 0.00160},
         
         # Anthropic
-        "anthropic/claude-opus-4": 0.0015,
-        "anthropic/claude-sonnet-4": 0.0005,
-        "anthropic/claude-3.5-haiku": 0.0003,
-        "anthropic/claude-3-opus": 0.0012,
-        "anthropic/claude-3-sonnet": 0.0004,
+        "anthropic/claude-opus-4": {"cost_per_1k_in": 0.01500, "cost_per_1k_out": 0.07500},
+        "anthropic/claude-sonnet-4": {"cost_per_1k_in": 0.00300, "cost_per_1k_out": 0.01500},
+        "anthropic/claude-3.5-haiku": {"cost_per_1k_in": 0.00080, "cost_per_1k_out": 0.00400},
         
         # Google
-        "google/gemini-2.5-pro-preview": 0.0006,
-        "google/gemini-2.5-flash-preview-05-20": 0.0001,
-        "google/gemini-pro": 0.0003,
-        "google/gemini-pro-vision": 0.0003,
+        "google/gemini-2.5-pro-preview": {"cost_per_1k_in": 0.00125, "cost_per_1k_out": 0.01000},
+        "google/gemini-2.5-flash-preview-05-20": {"cost_per_1k_in": 0.00015, "cost_per_1k_out": 0.00060},
         
-        # Meta (Llama)
-        "meta-llama/llama-4-maverick": 0.0001,
-        "meta-llama/llama-4-scout": 0.00008,
-        "meta-llama/llama-3.1-405b": 0.0009,
-        "meta-llama/llama-3.1-70b": 0.0004,
+        # Meta (Llama 4)
+        "meta-llama/llama-4-maverick": {"cost_per_1k_in": 0.00015, "cost_per_1k_out": 0.00060},
+        "meta-llama/llama-4-scout": {"cost_per_1k_in": 0.00008, "cost_per_1k_out": 0.00030},
         
         # Mistral
-        "mistralai/mistral-medium-3": 0.0003,
-        "mistralai/mistral-large": 0.0006,
-        "mistralai/mixtral-8x7b": 0.0002,
+        "mistralai/mistral-medium-3": {"cost_per_1k_in": 0.00040, "cost_per_1k_out": 0.00200},
         
         # Cohere
-        "cohere/command-r-plus": 0.0008,
-        "cohere/command-r": 0.0003,
+        "cohere/command-a": {"cost_per_1k_in": 0.00250, "cost_per_1k_out": 0.01000},
+        
+        # DeepSeek
+        "deepseek/deepseek-chat-v3-0324": {"cost_per_1k_in": 0.00030, "cost_per_1k_out": 0.00088},
+        "deepseek/deepseek-r1-0528": {"cost_per_1k_in": 0.00050, "cost_per_1k_out": 0.00215},
     }
     
-    base_cost = cost_per_scenario.get(model, 0.0005)
-    return scenario_count * base_cost
+    # Calculate cost per scenario (assuming 1k input tokens + 0.5k output tokens)
+    if model in MODELS_PRICING:
+        pricing = MODELS_PRICING[model]
+        input_cost = 1.0 * pricing["cost_per_1k_in"]  # 1k input tokens
+        output_cost = 0.5 * pricing["cost_per_1k_out"]  # 0.5k output tokens
+        cost_per_scenario = input_cost + output_cost
+    else:
+        # Default fallback for unknown models
+        cost_per_scenario = 0.0005
+    
+    return scenario_count * cost_per_scenario
 
 
 def _print_scenario_summary(scenarios: List[Any]) -> None:

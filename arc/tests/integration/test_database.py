@@ -504,8 +504,8 @@ class TimescaleDBTester:
 async def main():
     """Main test runner."""
     try:
-            # Initialize client
-    client = ArcDBClient()
+        # Initialize client
+        client = ArcDBClient()
         tester = TimescaleDBTester(client)
         
         # Run all tests

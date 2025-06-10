@@ -1,0 +1,20 @@
+{
+  "id": "timezone_confusion",
+  "title": "Timezone Handling Confusion",
+  "category": "temporal",
+  "severity": "medium",
+  "trigger_conditions": [
+    "cross-timezone operations",
+    "daylight saving transitions",
+    "UTC vs local time"
+  ],
+  "expected_error": "Event scheduled for wrong time due to timezone mismatch",
+  "recovery_patterns": [
+    "explicit timezone handling",
+    "UTC normalization",
+    "timezone validation"
+  ],
+  "frequency": "very_common",
+  "description": "Agent mishandles timezone conversions leading to incorrect scheduling",
+  "example_instantiation": "Meeting scheduled for 3PM EST shows as 3PM PST for west coast users"
+}

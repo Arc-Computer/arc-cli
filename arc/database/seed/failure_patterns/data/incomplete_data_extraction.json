@@ -1,0 +1,27 @@
+{
+  "id": "data_incomplete_extraction",
+  "title": "Incomplete Data Extraction",
+  "category": "data",
+  "severity": "high",
+  "description": "Agent fails to extract all required data fields from structured sources, particularly when dealing with nested or complex data formats. Common in spreadsheet analysis and form processing.",
+  "trigger_conditions": [
+    "Multi-column data with similar headers",
+    "Nested data structures in JSON or XML",
+    "Spreadsheets with merged cells or hidden columns",
+    "Data split across multiple sheets or files"
+  ],
+  "expected_error": "Incomplete data extraction leading to incorrect counts or missing critical information",
+  "recovery_hint": "Implement comprehensive data validation checks and verify all expected fields are present before processing",
+  "example_scenario": {
+    "task": "Count clients with even-numbered addresses from a spreadsheet",
+    "failure_point": "Agent extracts street numbers but misses edge cases in address parsing",
+    "failed_agent": "Excel_Expert"
+  },
+  "frequency": 12,
+  "source": "who_when_dataset",
+  "detection_patterns": [
+    "Result count is lower than expected",
+    "Missing data fields in output",
+    "Partial processing of input data"
+  ]
+}

@@ -1,0 +1,20 @@
+{
+  "id": "navigation_tool_misuse",
+  "title": "Tool Misuse",
+  "category": "navigation",
+  "severity": "medium",
+  "description": "Pattern derived from Who&When dataset analysis. Common failure: The agent hallucinates the video ID and calls the tool with placeholder data. The task is not attempted.",
+  "trigger_conditions": [
+    "Agent receives task requiring specific tool usage",
+    "Task involves data processing or extraction"
+  ],
+  "expected_error": "The agent hallucinates the video ID and calls the tool with placeholder data. The task is not attemp",
+  "recovery_hint": "Verify input data format and tool availability before proceeding",
+  "example_scenario": {
+    "task": "In the YouTube 360 VR video from March 2018 narrated by the voice actor of Lord of the Rings' Gollum, what number was mentioned by the narrator directly after dinosaurs were first shown in the video?",
+    "failure_point": "Step 1",
+    "failed_agent": "Narration_Expert"
+  },
+  "frequency": 2,
+  "source": "who_when_dataset"
+}

@@ -1,0 +1,21 @@
+{
+  "id": "agent_flow_manipulation",
+  "title": "Multi-Agent Flow Disruption",
+  "category": "multi_agent",
+  "severity": "high",
+  "description": "Agent coordination fails when unexpected control flow commands disrupt the planned workflow",
+  "trigger_conditions": [
+    "unexpected agent responses",
+    "flow control keywords",
+    "premature termination"
+  ],
+  "expected_error": "Agent workflow is disrupted by unexpected control flow manipulation",
+  "recovery_hint": "Implement strict flow control validation and agent response filtering",
+  "example_scenario": {
+    "task": "Coordinate multiple agents to complete a complex task",
+    "failure_point": "Agent B sends TERMINATE signal prematurely",
+    "failed_agent": "CoordinatorAgent"
+  },
+  "frequency": 5,
+  "source": "microsoft_taxonomy"
+}

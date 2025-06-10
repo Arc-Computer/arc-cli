@@ -1,0 +1,20 @@
+{
+  "id": "race_condition",
+  "title": "Tool Execution Race Condition",
+  "category": "logic",
+  "severity": "medium",
+  "trigger_conditions": [
+    "parallel tool calls",
+    "shared resource access",
+    "timing-dependent behavior"
+  ],
+  "expected_error": "Resource already modified by another operation",
+  "recovery_patterns": [
+    "locking mechanisms",
+    "sequential execution",
+    "conflict resolution"
+  ],
+  "frequency": "common",
+  "description": "Concurrent tool executions interfere with each other",
+  "example_instantiation": "Two agents updating same database record simultaneously causing data loss"
+}

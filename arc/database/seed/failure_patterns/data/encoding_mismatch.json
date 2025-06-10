@@ -1,0 +1,20 @@
+{
+  "id": "encoding_mismatch",
+  "title": "Character Encoding Mismatch",
+  "category": "data",
+  "severity": "low",
+  "trigger_conditions": [
+    "UTF-8 vs Latin-1",
+    "special characters",
+    "emoji in text fields"
+  ],
+  "expected_error": "UnicodeDecodeError: invalid start byte",
+  "recovery_patterns": [
+    "encoding detection",
+    "fallback to ASCII",
+    "sanitization of non-standard chars"
+  ],
+  "frequency": "uncommon",
+  "description": "Tool returns data in unexpected encoding causing parsing failures",
+  "example_instantiation": "European customer names with accents cause UTF-8 decoding errors"
+}

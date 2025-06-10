@@ -1,0 +1,20 @@
+{
+  "id": "tool_compromise",
+  "title": "Compromised Tool Response",
+  "category": "security",
+  "severity": "high",
+  "trigger_conditions": [
+    "unexpected tool behavior",
+    "malicious payloads",
+    "response tampering"
+  ],
+  "expected_error": "Tool response validation failed",
+  "recovery_patterns": [
+    "response validation",
+    "tool sandboxing",
+    "anomaly detection"
+  ],
+  "frequency": "rare",
+  "description": "Tool returns malicious or unexpected responses attempting to compromise agent",
+  "example_instantiation": "Weather tool returns JavaScript code instead of weather data"
+}

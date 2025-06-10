@@ -1,0 +1,20 @@
+{
+  "id": "coordination_deadlock",
+  "title": "Multi-Agent Coordination Deadlock",
+  "category": "multi_agent",
+  "severity": "high",
+  "trigger_conditions": [
+    "agents waiting for each other",
+    "circular dependencies",
+    "resource contention"
+  ],
+  "expected_error": "Agents deadlocked waiting for resources",
+  "recovery_patterns": [
+    "deadlock detection",
+    "timeout mechanisms",
+    "resource ordering"
+  ],
+  "frequency": "uncommon",
+  "description": "Multiple agents enter deadlock state waiting for each other's outputs",
+  "example_instantiation": "Agent A waits for B's analysis while B waits for A's data extraction"
+}

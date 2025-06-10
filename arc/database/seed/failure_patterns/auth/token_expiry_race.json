@@ -1,0 +1,20 @@
+{
+  "id": "token_expiry_race",
+  "title": "Authentication Token Expiry Race",
+  "category": "auth",
+  "severity": "medium",
+  "trigger_conditions": [
+    "token near expiry",
+    "long-running operations",
+    "refresh timing"
+  ],
+  "expected_error": "401 Unauthorized: Token expired during operation",
+  "recovery_patterns": [
+    "proactive token refresh",
+    "retry with new token",
+    "operation checkpointing"
+  ],
+  "frequency": "common",
+  "description": "Auth token expires mid-operation causing partial completion",
+  "example_instantiation": "Bulk data export fails after 50% when OAuth token expires"
+}

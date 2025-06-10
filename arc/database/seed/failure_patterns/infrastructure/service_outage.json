@@ -1,0 +1,20 @@
+{
+  "id": "service_outage",
+  "title": "Complete Service Unavailability",
+  "category": "infrastructure",
+  "severity": "critical",
+  "trigger_conditions": [
+    "503 Service Unavailable",
+    "connection refused",
+    "DNS resolution failure"
+  ],
+  "expected_error": "Service unavailable: Connection refused",
+  "recovery_patterns": [
+    "circuit breaker activation",
+    "fallback service",
+    "user notification"
+  ],
+  "frequency": "rare",
+  "description": "Primary service completely unreachable, testing agent's failure handling",
+  "example_instantiation": "Fetch product details when database service is completely down"
+}

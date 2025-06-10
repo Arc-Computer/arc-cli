@@ -1,0 +1,32 @@
+{
+  "id": "navigation_incorrect_page",
+  "title": "Incorrect Page Navigation",
+  "category": "navigation",
+  "severity": "medium",
+  "description": "Agent navigates to incorrect or irrelevant pages when attempting to find information, often due to clicking on ads, unrelated links, or misinterpreting search results.",
+  "trigger_conditions": [
+    "Search results with sponsored content or ads",
+    "Similar-looking links with different destinations",
+    "Dynamic page content that changes after initial load",
+    "Ambiguous link text requiring context understanding"
+  ],
+  "expected_error": "Agent gets stuck on irrelevant page or fails to return to correct navigation path",
+  "recovery_hint": "Implement URL validation and page content verification before proceeding with data extraction",
+  "example_scenario": {
+    "task": "Find martial arts schools near New York Stock Exchange",
+    "failure_point": "Agent clicks on unrelated advertisement instead of martial arts school listing",
+    "failed_agent": "WebSurfer"
+  },
+  "frequency": 8,
+  "source": "who_when_dataset",
+  "detection_patterns": [
+    "URL domain doesn't match expected pattern",
+    "Page content lacks expected keywords",
+    "Multiple back button presses required"
+  ],
+  "mitigation_strategies": [
+    "Verify page title and URL before interaction",
+    "Check for expected content markers",
+    "Maintain navigation breadcrumb trail"
+  ]
+}

@@ -1,0 +1,294 @@
+{
+  "get_weather": {
+    "tool_name": "get_weather",
+    "description": "Retrieves weather information for a specified city",
+    "input_schema": {
+      "city": {
+        "type": "string",
+        "description": "The name of the city"
+      }
+    },
+    "response_profiles": {
+      "success": {
+        "status_code": 200,
+        "response_time_ms": 150,
+        "response_template": {
+          "temperature": 72,
+          "condition": "sunny",
+          "humidity": 45,
+          "wind_speed": 10,
+          "forecast": "Clear skies expected throughout the day"
+        },
+        "variations": [
+          {
+            "condition": "rainy",
+            "temperature": 55,
+            "forecast": "Light rain expected in the afternoon"
+          },
+          {
+            "condition": "cloudy",
+            "temperature": 68,
+            "forecast": "Overcast with possible clearing by evening"
+          }
+        ]
+      },
+      "not_found": {
+        "status_code": 404,
+        "response_time_ms": 100,
+        "error_template": {
+          "error": "City not found",
+          "message": "The specified city '{city}' could not be found in our weather database",
+          "suggestion": "Please check the spelling or try a nearby major city"
+        }
+      },
+      "server_error": {
+        "status_code": 500,
+        "response_time_ms": 50,
+        "error_template": {
+          "error": "Internal server error",
+          "message": "Weather service temporarily unavailable",
+          "retry_after": 300
+        }
+      },
+      "timeout": {
+        "status_code": null,
+        "response_time_ms": 30000,
+        "error_template": {
+          "error": "Request timeout",
+          "message": "Weather service did not respond within 30 seconds",
+          "timeout_duration": 30000
+        }
+      },
+      "rate_limited": {
+        "status_code": 429,
+        "response_time_ms": 10,
+        "error_template": {
+          "error": "Rate limit exceeded",
+          "message": "Too many requests to weather service",
+          "retry_after": 60,
+          "limit": "10 requests per minute"
+        }
+      },
+      "malformed_response": {
+        "status_code": 200,
+        "response_time_ms": 200,
+        "response_template": {
+          "temp": "seventy-two",
+          "weather": null,
+          "data": "{corrupted}",
+          "_note": "This simulates a successful request with malformed data"
+        }
+      },
+      "empty_response": {
+        "status_code": 200,
+        "response_time_ms": 120,
+        "response_template": {}
+      },
+      "partial_data": {
+        "status_code": 200,
+        "response_time_ms": 180,
+        "response_template": {
+          "temperature": 68,
+          "condition": null,
+          "forecast": "Data collection in progress"
+        }
+      }
+    },
+    "edge_cases": [
+      {
+        "input": {"city": ""},
+        "expected_behavior": "Return 400 Bad Request with 'City name cannot be empty'"
+      },
+      {
+        "input": {"city": "New York; DROP TABLE weather;--"},
+        "expected_behavior": "Sanitize input and process safely or return 400"
+      },
+      {
+        "input": {"city": "🌍"},
+        "expected_behavior": "Handle Unicode gracefully or return clear error"
+      },
+      {
+        "input": {"city": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"},
+        "expected_behavior": "Enforce reasonable length limits"
+      }
+    ]
+  },
+  "search_database": {
+    "tool_name": "search_database",
+    "description": "Searches product database with optional filters",
+    "input_schema": {
+      "query": {
+        "type": "string",
+        "description": "Search query"
+      },
+      "filters": {
+        "type": "object",
+        "description": "Optional filters",
+        "properties": {
+          "category": {"type": "string"},
+          "price_range": {"type": "object"},
+          "in_stock": {"type": "boolean"}
+        }
+      }
+    },
+    "response_profiles": {
+      "success": {
+        "status_code": 200,
+        "response_time_ms": 250,
+        "response_template": {
+          "results": [
+            {
+              "id": "prod_123",
+              "name": "Example Product",
+              "price": 29.99,
+              "category": "electronics",
+              "in_stock": true,
+              "description": "High-quality product"
+            }
+          ],
+          "total_count": 1,
+          "page": 1,
+          "page_size": 10
+        }
+      },
+      "no_results": {
+        "status_code": 200,
+        "response_time_ms": 150,
+        "response_template": {
+          "results": [],
+          "total_count": 0,
+          "page": 1,
+          "page_size": 10,
+          "message": "No products found matching your criteria"
+        }
+      },
+      "server_error": {
+        "status_code": 500,
+        "response_time_ms": 100,
+        "error_template": {
+          "error": "Database connection failed",
+          "message": "Unable to connect to product database",
+          "error_code": "DB_CONN_FAIL"
+        }
+      },
+      "timeout": {
+        "status_code": null,
+        "response_time_ms": 60000,
+        "error_template": {
+          "error": "Query timeout",
+          "message": "Database query exceeded 60 second limit",
+          "query_complexity": "high"
+        }
+      },
+      "invalid_filter": {
+        "status_code": 400,
+        "response_time_ms": 50,
+        "error_template": {
+          "error": "Invalid filter",
+          "message": "The filter '{filter_name}' is not recognized",
+          "valid_filters": ["category", "price_range", "in_stock"]
+        }
+      },
+      "schema_mismatch": {
+        "status_code": 200,
+        "response_time_ms": 300,
+        "response_template": {
+          "items": [
+            {
+              "product_id": "123",
+              "title": "Product Name",
+              "cost": "29.99",
+              "available": "yes"
+            }
+          ],
+          "_note": "Different field names than expected schema"
+        }
+      },
+      "corrupted_data": {
+        "status_code": 200,
+        "response_time_ms": 280,
+        "response_template": {
+          "results": [
+            {
+              "id": "prod_456",
+              "name": null,
+              "price": -15.99,
+              "category": "",
+              "in_stock": "maybe"
+            }
+          ],
+          "total_count": "one",
+          "page": 0
+        }
+      },
+      "rate_limited": {
+        "status_code": 429,
+        "response_time_ms": 20,
+        "error_template": {
+          "error": "Rate limit exceeded",
+          "message": "Database query limit reached",
+          "retry_after": 120,
+          "limit": "100 queries per hour"
+        }
+      }
+    },
+    "edge_cases": [
+      {
+        "input": {"query": "", "filters": {}},
+        "expected_behavior": "Return all products with pagination or error"
+      },
+      {
+        "input": {"query": "'; DROP TABLE products; --"},
+        "expected_behavior": "Properly escape SQL injection attempts"
+      },
+      {
+        "input": {"query": "laptop", "filters": {"price_range": {"min": 1000, "max": 500}}},
+        "expected_behavior": "Handle invalid price range gracefully"
+      },
+      {
+        "input": {"query": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+        "expected_behavior": "Handle extremely long queries with limits"
+      }
+    ]
+  },
+  "common_patterns": {
+    "cascading_failures": [
+      {
+        "scenario": "Weather service timeout triggers database overload",
+        "sequence": [
+          "get_weather returns timeout",
+          "Agent retries multiple times",
+          "Fallback to search_database for location info",
+          "Database gets overloaded with requests"
+        ]
+      }
+    ],
+    "race_conditions": [
+      {
+        "scenario": "Concurrent tool calls with conflicting data",
+        "description": "Agent makes parallel calls that return inconsistent state"
+      }
+    ],
+    "error_recovery": {
+      "retry_strategies": [
+        "Exponential backoff for 500 errors",
+        "Circuit breaker after 3 consecutive failures",
+        "Fallback to cached data when available"
+      ]
+    }
+  },
+  "instrumentation": {
+    "metrics_to_capture": [
+      "response_time_ms",
+      "status_code",
+      "error_rate",
+      "retry_count",
+      "cache_hit_rate"
+    ],
+    "logging_requirements": {
+      "always_log": ["errors", "timeouts", "rate_limits"],
+      "sample_rate": 0.1,
+      "include_request_context": true
+    }
+  }
+}

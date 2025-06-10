@@ -1,0 +1,20 @@
+{
+  "id": "resource_exhaustion",
+  "title": "System Resource Exhaustion",
+  "category": "infrastructure",
+  "severity": "critical",
+  "trigger_conditions": [
+    "memory pressure",
+    "disk space full",
+    "file descriptor limits"
+  ],
+  "expected_error": "OSError: [Errno 28] No space left on device",
+  "recovery_patterns": [
+    "resource monitoring",
+    "graceful degradation",
+    "cleanup routines"
+  ],
+  "frequency": "uncommon",
+  "description": "Agent operations fail due to exhausted system resources",
+  "example_instantiation": "Large file processing fills /tmp causing all subsequent operations to fail"
+}

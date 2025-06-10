@@ -154,7 +154,7 @@ class FailureClusterer:
         # Vectorize failure texts
         try:
             feature_vectors = self.vectorizer.fit_transform(failure_texts)
-        except:
+        except (ValueError, TypeError):
             # If vectorization fails, use simple grouping by type
             return self._simple_clustering(failures)
         

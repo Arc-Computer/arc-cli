@@ -1,7 +1,7 @@
 """Arc diff command - compare two agent configurations."""
 
 import asyncio
-from typing import Dict, Any
+from typing import Any
 
 import click
 from rich.table import Table
@@ -170,16 +170,18 @@ def diff(config1: str, config2: str, scenarios: int, json_output: bool):
             
             # Interpretation
             if analysis["significant"] and rel_diff > 0:
+                relative_improvement = (rel_diff/reliability_a*100) if reliability_a > 0 else float('inf')
                 console.print(Panel.fit(
                     f"[success]Config B shows a {rel_diff*100:.1f} percentage point improvement[/success]\n"
-                    f"This represents a {(rel_diff/reliability_a*100):.1f}% relative improvement",
+                    f"This represents a {relative_improvement:.1f}% relative improvement" if reliability_a > 0 else "Config A had 0% reliability",
                     title="Conclusion",
                     border_style="success"
                 ))
             elif analysis["significant"] and rel_diff < 0:
+                relative_decrease = abs(rel_diff/reliability_a*100) if reliability_a > 0 else float('inf')
                 console.print(Panel.fit(
                     f"[error]Config B shows a {abs(rel_diff)*100:.1f} percentage point regression[/error]\n"
-                    f"This represents a {abs(rel_diff/reliability_a*100):.1f}% relative decrease",
+                    f"This represents a {relative_decrease:.1f}% relative decrease" if reliability_a > 0 else "Config A had 0% reliability",
                     title="Conclusion",
                     border_style="error"
                 ))
@@ -201,7 +203,7 @@ def diff(config1: str, config2: str, scenarios: int, json_output: bool):
         raise click.exceptions.Exit(1)
 
 
-def _perform_statistical_analysis(results_a: list, results_b: list) -> Dict[str, Any]:
+def _perform_statistical_analysis(results_a: list, results_b: list) -> dict[str, Any]:
     """Perform statistical analysis on A/B test results."""
     # Convert to binary success arrays
     successes_a = [1 if r["success"] else 0 for r in results_a]

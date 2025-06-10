@@ -1,6 +1,6 @@
 """Arc analyze command - analyze failures from a run."""
 
-from typing import Optional, List, Dict
+# Type annotations use modern syntax (str | None)
 
 import click
 from rich.table import Table
@@ -15,7 +15,7 @@ state = CLIState()
 @click.command()
 @click.option('--run', 'run_id', help='Specific run ID to analyze (default: last run)')
 @click.option('--json', 'json_output', is_flag=True, help='Output JSON instead of rich text')
-def analyze(run_id: Optional[str], json_output: bool):
+def analyze(run_id: str | None, json_output: bool):
     """Analyze failures from the last run.
     
     This command:
@@ -117,7 +117,7 @@ def analyze(run_id: Optional[str], json_output: bool):
         raise click.exceptions.Exit(1)
 
 
-def _cluster_failures(failures: List[Dict]) -> List[Dict]:
+def _cluster_failures(failures: list[dict]) -> list[dict]:
     """Cluster failures by pattern (simplified implementation)."""
     clusters = {}
     
@@ -159,7 +159,7 @@ def _cluster_failures(failures: List[Dict]) -> List[Dict]:
     return cluster_list
 
 
-def _identify_top_issues(clusters: List[Dict]) -> List[Dict]:
+def _identify_top_issues(clusters: list[dict]) -> list[dict]:
     """Identify top issues from failure clusters."""
     issues = []
     

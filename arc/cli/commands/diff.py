@@ -1,12 +1,18 @@
 """Arc diff command - compare two agent configurations."""
 
 import asyncio
-from typing import Any
+from typing import Any, Dict
 
 import click
 from rich.table import Table
 from rich.panel import Panel
 from scipy import stats
+import numpy as np
+from scipy.stats import chi2_contingency
+try:
+    from statsmodels.stats.power import ttest_power
+except ImportError:
+    ttest_power = None
 
 from arc.cli.utils import ArcConsole, CLIState, format_error, format_success, format_warning
 from arc.cli.commands.run import _generate_scenarios_async, _estimate_cost, _simulate_execution
@@ -159,13 +165,21 @@ def diff(config1: str, config2: str, scenarios: int, json_output: bool):
             # Statistical validation
             console.print_header("Statistical Validation")
             
-            if analysis["significant"]:
-                console.print(format_success(f"✓ Improvement is statistically significant (p = {analysis['p_value']:.4f})"))
-            else:
-                console.print(format_warning(f"Improvement is NOT statistically significant (p = {analysis['p_value']:.4f})"))
+            # Sample size warning if applicable
+            if analysis.get("sample_size_warning"):
+                console.print(format_warning(analysis["sample_size_warning"]))
+                console.print()
             
-            console.print_metric("Effect size (Cohen's d)", f"{analysis['effect_size']:.2f}")
+            if analysis["significant"]:
+                console.print(format_success(f"✓ Difference is statistically significant (p = {analysis['p_value']:.4f})"))
+            else:
+                console.print(format_warning(f"Difference is NOT statistically significant (p = {analysis['p_value']:.4f})"))
+            
+            console.print_metric("Test type", analysis.get("test_type", "chi-square"))
+            console.print_metric("Effect size (Cohen's h)", f"{analysis['effect_size']:.2f} ({analysis['interpretation']})") 
             console.print_metric("Confidence interval", f"[{analysis['ci_lower']:.1%}, {analysis['ci_upper']:.1%}]")
+            if analysis.get("power") is not None:
+                console.print_metric("Statistical power", f"{analysis['power']:.2f}")
             console.print()
             
             # Interpretation
@@ -203,48 +217,81 @@ def diff(config1: str, config2: str, scenarios: int, json_output: bool):
         raise click.exceptions.Exit(1)
 
 
-def _perform_statistical_analysis(results_a: list, results_b: list) -> dict[str, Any]:
-    """Perform statistical analysis on A/B test results."""
+def _perform_statistical_analysis(results_a: list, results_b: list) -> Dict[str, Any]:
+    """Perform statistical analysis on A/B test results with proper validation."""
+    # Validate sample sizes
+    n_a = len(results_a)
+    n_b = len(results_b)
+    
+    min_sample_size = 30  # Minimum for reliable statistics
+    sample_size_warning = None
+    
+    if n_a < min_sample_size or n_b < min_sample_size:
+        sample_size_warning = f"Small sample size detected (A: {n_a}, B: {n_b}). Results may not be reliable. Consider running with at least {min_sample_size} scenarios."
+    
     # Convert to binary success arrays
     successes_a = [1 if r["success"] else 0 for r in results_a]
     successes_b = [1 if r["success"] else 0 for r in results_b]
     
-    # Perform t-test
-    t_stat, p_value = stats.ttest_ind(successes_b, successes_a)
+    # Calculate proportions
+    p_a = sum(successes_a) / n_a if n_a > 0 else 0
+    p_b = sum(successes_b) / n_b if n_b > 0 else 0
     
-    # Calculate effect size (Cohen's d)
-    mean_a = sum(successes_a) / len(successes_a)
-    mean_b = sum(successes_b) / len(successes_b)
-    std_a = stats.tstd(successes_a)
-    std_b = stats.tstd(successes_b)
-    pooled_std = ((std_a ** 2 + std_b ** 2) / 2) ** 0.5
+    # Use chi-square test for proportions (more appropriate than t-test for binary data)
+    from scipy.stats import chi2_contingency
+    contingency_table = [
+        [sum(successes_a), n_a - sum(successes_a)],
+        [sum(successes_b), n_b - sum(successes_b)]
+    ]
+    chi2, p_value, dof, expected = chi2_contingency(contingency_table)
     
-    effect_size = (mean_b - mean_a) / pooled_std if pooled_std > 0 else 0
+    # Calculate effect size (Cohen's h for proportions)
+    # h = 2 * (arcsin(sqrt(p1)) - arcsin(sqrt(p2)))
+    import numpy as np
+    h = 2 * (np.arcsin(np.sqrt(p_b)) - np.arcsin(np.sqrt(p_a)))
     
-    # Calculate confidence interval
-    diff = mean_b - mean_a
-    se = pooled_std * (2 / len(successes_a)) ** 0.5
-    ci_lower = diff - 1.96 * se
-    ci_upper = diff + 1.96 * se
+    # Calculate confidence interval for difference in proportions
+    pooled_p = (sum(successes_a) + sum(successes_b)) / (n_a + n_b)
+    se = np.sqrt(pooled_p * (1 - pooled_p) * (1/n_a + 1/n_b))
+    diff = p_b - p_a
+    z_critical = 1.96  # 95% confidence
+    ci_lower = diff - z_critical * se
+    ci_upper = diff + z_critical * se
+    
+    # Calculate statistical power
+    if ttest_power is not None:
+        try:
+            power = ttest_power(abs(h), n_a, alpha=0.05, alternative='two-sided')
+        except:
+            power = None
+    else:
+        power = None
     
     return {
         "p_value": p_value,
         "significant": p_value < 0.05,
-        "effect_size": effect_size,
+        "effect_size": h,
         "ci_lower": ci_lower,
         "ci_upper": ci_upper,
-        "interpretation": _interpret_effect_size(effect_size)
+        "interpretation": _interpret_effect_size(h),
+        "sample_size_a": n_a,
+        "sample_size_b": n_b,
+        "power": power,
+        "sample_size_warning": sample_size_warning,
+        "test_type": "chi-square",
+        "reliability_a": p_a,
+        "reliability_b": p_b
     }
 
 
-def _interpret_effect_size(d: float) -> str:
-    """Interpret Cohen's d effect size."""
-    abs_d = abs(d)
-    if abs_d < 0.2:
+def _interpret_effect_size(h: float) -> str:
+    """Interpret Cohen's h effect size for proportions."""
+    abs_h = abs(h)
+    if abs_h < 0.2:
         return "negligible"
-    elif abs_d < 0.5:
+    elif abs_h < 0.5:
         return "small"
-    elif abs_d < 0.8:
+    elif abs_h < 0.8:
         return "medium"
     else:
         return "large"

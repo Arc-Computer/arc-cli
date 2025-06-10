@@ -1,6 +1,6 @@
 """Arc recommend command - get improvement recommendations."""
 
-from typing import Any
+from typing import Any, Optional
 
 import click
 from rich.table import Table
@@ -16,7 +16,7 @@ state = CLIState()
 @click.command()
 @click.option('--run', 'run_id', help='Specific run ID (default: last run)')
 @click.option('--json', 'json_output', is_flag=True, help='Output JSON instead of rich text')
-def recommend(run_id: str | None, json_output: bool):
+def recommend(run_id: Optional[str], json_output: bool):
     """Get configuration improvement recommendations.
     
     This command:

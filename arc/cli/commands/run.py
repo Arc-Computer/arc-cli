@@ -5,7 +5,7 @@ import os
 import time
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, List, Dict, Optional
 from uuid import uuid4
 
 import click
@@ -30,7 +30,7 @@ state = CLIState()
 @click.option('--scenarios', '-s', default=50, help='Number of scenarios to generate (default: 50)')
 @click.option('--json', 'json_output', is_flag=True, help='Output JSON instead of rich text')
 @click.option('--no-confirm', is_flag=True, help='Skip cost confirmation prompt')
-@click.option('--pattern-ratio', default=0.7, help='Ratio of pattern-based scenarios (0-1)')
+@click.option('--pattern-ratio', default=0.7, type=click.FloatRange(0.0, 1.0), help='Ratio of pattern-based scenarios (0-1)')
 def run(config_path: str, scenarios: int, json_output: bool, no_confirm: bool, pattern_ratio: float):
     """Test an agent configuration with generated scenarios.
     
@@ -200,9 +200,9 @@ async def _generate_scenarios_async(
     config_path: str,
     count: int,
     pattern_ratio: float,
-    capabilities: dict[str, Any],
+    capabilities: Dict[str, Any],
     json_output: bool
-) -> list[Scenario]:
+) -> List[Scenario]:
     """Generate scenarios asynchronously."""
     try:
         # Check if finance domain for currency scenarios
@@ -265,19 +265,50 @@ async def _generate_scenarios_async(
 
 def _estimate_cost(scenario_count: int, model: str) -> float:
     """Estimate cost for running scenarios."""
-    # Simplified cost estimation
+    # Comprehensive model pricing (per scenario estimate based on ~1500 tokens)
+    # Pricing includes both input and output tokens
     cost_per_scenario = {
+        # OpenAI
         "openai/gpt-4.1": 0.0010,
         "openai/gpt-4.1-mini": 0.0002,
+        "openai/gpt-4o": 0.0008,
+        "openai/gpt-4o-mini": 0.0001,
+        "openai/gpt-3.5-turbo": 0.00015,
+        
+        # Anthropic
         "anthropic/claude-opus-4": 0.0015,
         "anthropic/claude-sonnet-4": 0.0005,
+        "anthropic/claude-3.5-haiku": 0.0003,
+        "anthropic/claude-3-opus": 0.0012,
+        "anthropic/claude-3-sonnet": 0.0004,
+        
+        # Google
+        "google/gemini-2.5-pro-preview": 0.0006,
+        "google/gemini-2.5-flash-preview-05-20": 0.0001,
+        "google/gemini-pro": 0.0003,
+        "google/gemini-pro-vision": 0.0003,
+        
+        # Meta (Llama)
+        "meta-llama/llama-4-maverick": 0.0001,
+        "meta-llama/llama-4-scout": 0.00008,
+        "meta-llama/llama-3.1-405b": 0.0009,
+        "meta-llama/llama-3.1-70b": 0.0004,
+        
+        # Mistral
+        "mistralai/mistral-medium-3": 0.0003,
+        "mistralai/mistral-large": 0.0006,
+        "mistralai/mixtral-8x7b": 0.0002,
+        
+        # Cohere
+        "cohere/command-r-plus": 0.0008,
+        "cohere/command-r": 0.0003,
     }
     
     base_cost = cost_per_scenario.get(model, 0.0005)
     return scenario_count * base_cost
 
 
-def _print_scenario_summary(scenarios: list[Any]) -> None:
+def _print_scenario_summary(scenarios: List[Any]) -> None:
     """Print summary of generated scenarios."""
     # Count by domain
     domains = {}
@@ -291,7 +322,7 @@ def _print_scenario_summary(scenarios: list[Any]) -> None:
             console.print(f"  {domain}: {count} scenarios", style="muted")
 
 
-def _simulate_execution(scenarios: list[Any], json_output: bool) -> tuple[list[dict[str, Any]], float]:
+def _simulate_execution(scenarios: List[Any], json_output: bool) -> tuple[List[Dict[str, Any]], float]:
     """Simulate scenario execution with mock results."""
     results = []
     start_time = time.time()
@@ -346,17 +377,25 @@ def _check_modal_available() -> bool:
     """Check if Modal is installed and configured."""
     try:
         import modal
-        # Check for Modal token
-        return bool(os.environ.get("MODAL_TOKEN_ID"))
+        # Check for both Modal tokens
+        has_token_id = bool(os.environ.get("MODAL_TOKEN_ID"))
+        has_token_secret = bool(os.environ.get("MODAL_TOKEN_SECRET"))
+        
+        if has_token_id and not has_token_secret:
+            console.print(format_warning("MODAL_TOKEN_ID found but MODAL_TOKEN_SECRET is missing"))
+            console.print("Run 'modal setup' to complete authentication", style="muted")
+            return False
+            
+        return has_token_id and has_token_secret
     except ImportError:
         return False
 
 
 def _execute_with_modal(
-    scenarios: list[Scenario],
-    agent_config: dict[str, Any],
+    scenarios: List[Scenario],
+    agent_config: Dict[str, Any],
     json_output: bool
-) -> tuple[list[dict[str, Any]], float, float]:
+) -> tuple[List[Dict[str, Any]], float, float]:
     """Execute scenarios using Modal sandbox.
     
     Returns:

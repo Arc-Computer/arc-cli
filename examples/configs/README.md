@@ -4,11 +4,25 @@ This directory contains example agent configurations for Arc-CLI. These realisti
 
 **Note**: The `arc/config/` directory contains Arc's internal configuration files (development.py, production.py, etc.), while this `examples/configs/` directory contains example agent configurations for users to reference.
 
+## Getting Started
+
+Arc accepts agent configurations in various formats. At minimum, you need:
+- `model`: The LLM model to use
+- `temperature`: Model temperature setting  
+- `system_prompt`: Instructions for the agent
+- `tools`: List of available tools
+
+See `minimal_agent.yaml` for the simplest possible configuration.
+
 ## Overview
 
 The configurations represent a real-world progression from a basic implementation to a more robust system. They serve as both examples for users and test cases for Arc's evaluation pipeline.
 
 ## Configurations
+
+### 0. minimal_agent.yaml - Minimal Configuration Example
+
+**Purpose**: Shows the bare minimum configuration Arc needs to profile an agent. Start here if you're new to Arc or want to test basic functionality.
 
 ### 1. finance_agent_v1.yaml - Basic Finance Agent
 

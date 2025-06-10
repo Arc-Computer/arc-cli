@@ -7,20 +7,76 @@ including hypertables, continuous aggregates, and time-series queries.
 from __future__ import annotations
 
 import os
-from typing import AsyncIterator, Dict, List, Optional, Any
+import logging
+import asyncio
+from typing import AsyncIterator, Dict, List, Optional, Any, TypeVar, Callable
 from datetime import datetime, timedelta
 import json
 import hashlib
 import uuid
+from functools import wraps
 
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy import text, select, insert, update, delete
+from sqlalchemy.exc import SQLAlchemyError, OperationalError, IntegrityError
 import asyncpg
+
+# Configure logging
+logger = logging.getLogger(__name__)
 
 __all__: list[str] = ["get_engine", "get_session", "ArcEvalDBClient", "TimescaleDBHealth"]
 
 _engine: AsyncEngine | None = None
+
+# Type variable for retry decorator
+T = TypeVar('T')
+
+
+class DatabaseError(Exception):
+    """Base exception for database operations."""
+    pass
+
+
+class ConnectionError(DatabaseError):
+    """Raised when database connection fails."""
+    pass
+
+
+class RetryableError(DatabaseError):
+    """Raised for errors that can be retried."""
+    pass
+
+
+def with_retry(max_attempts: int = 3, delay: float = 1.0, backoff: float = 2.0):
+    """Decorator for retrying database operations with exponential backoff."""
+    def decorator(func: Callable[..., T]) -> Callable[..., T]:
+        @wraps(func)
+        async def wrapper(*args, **kwargs) -> T:
+            last_exception = None
+            
+            for attempt in range(max_attempts):
+                try:
+                    return await func(*args, **kwargs)
+                except (OperationalError, asyncpg.PostgresConnectionError) as e:
+                    last_exception = e
+                    if attempt < max_attempts - 1:
+                        wait_time = delay * (backoff ** attempt)
+                        logger.warning(
+                            f"Retryable error in {func.__name__} (attempt {attempt + 1}/{max_attempts}): {e}. "
+                            f"Retrying in {wait_time:.1f}s..."
+                        )
+                        await asyncio.sleep(wait_time)
+                    else:
+                        logger.error(f"Max retries exceeded for {func.__name__}: {e}")
+                except Exception as e:
+                    logger.error(f"Non-retryable error in {func.__name__}: {e}")
+                    raise
+            
+            raise RetryableError(f"Operation failed after {max_attempts} attempts") from last_exception
+        
+        return wrapper
+    return decorator
 
 
 def get_engine(dsn: str | None = None) -> AsyncEngine:
@@ -57,14 +113,19 @@ def get_engine(dsn: str | None = None) -> AsyncEngine:
             max_overflow=30,
             pool_timeout=30,
             pool_recycle=3600,  # 1 hour
+            pool_pre_ping=True,  # Enable connection health checks
             connect_args={
                 "ssl": "require",  # SSL for TimescaleDB Cloud
                 "server_settings": {
                     "jit": "off",  # Recommended for analytical workloads
                     "timezone": "UTC"
-                }
+                },
+                "command_timeout": 60,  # 60 second timeout for commands
+                "prepared_statement_cache_size": 0,  # Disable prepared statements for better compatibility
             }
         )
+        
+        logger.info("Database engine created successfully")
     return _engine
 
 
@@ -82,61 +143,168 @@ class TimescaleDBHealth:
     def __init__(self, engine: AsyncEngine):
         self.engine = engine
     
+    @with_retry(max_attempts=3, delay=0.5)
     async def check_extensions(self) -> Dict[str, str]:
         """Check that required extensions are installed."""
-        async with self.engine.begin() as conn:
-            result = await conn.execute(text("""
-                SELECT name, installed_version 
-                FROM pg_available_extensions 
-                WHERE name IN ('timescaledb', 'uuid-ossp', 'vector')
-                AND installed_version IS NOT NULL
-            """))
-            return {row.name: row.installed_version for row in result}
+        try:
+            async with self.engine.begin() as conn:
+                result = await conn.execute(text("""
+                    SELECT name, installed_version 
+                    FROM pg_available_extensions 
+                    WHERE name IN ('timescaledb', 'uuid-ossp', 'vector')
+                    AND installed_version IS NOT NULL
+                """))
+                extensions = {row.name: row.installed_version for row in result}
+                logger.debug(f"Extensions found: {extensions}")
+                return extensions
+        except Exception as e:
+            logger.error(f"Failed to check extensions: {e}")
+            raise DatabaseError(f"Extension check failed: {e}") from e
     
+    @with_retry(max_attempts=3, delay=0.5)
     async def check_hypertables(self) -> List[Dict[str, Any]]:
         """Check status of hypertables."""
-        async with self.engine.begin() as conn:
-            result = await conn.execute(text("""
-                SELECT 
-                    hypertable_name,
-                    num_chunks,
-                    compression_enabled
-                FROM timescaledb_information.hypertables
-            """))
-            return [dict(row._mapping) for row in result]
+        try:
+            async with self.engine.begin() as conn:
+                result = await conn.execute(text("""
+                    SELECT 
+                        hypertable_name,
+                        num_chunks,
+                        compression_enabled
+                    FROM timescaledb_information.hypertables
+                """))
+                hypertables = [dict(row._mapping) for row in result]
+                logger.debug(f"Found {len(hypertables)} hypertables")
+                return hypertables
+        except Exception as e:
+            logger.error(f"Failed to check hypertables: {e}")
+            raise DatabaseError(f"Hypertable check failed: {e}") from e
     
+    @with_retry(max_attempts=3, delay=0.5)
     async def check_compression_stats(self) -> List[Dict[str, Any]]:
         """Check compression statistics."""
-        async with self.engine.begin() as conn:
-            result = await conn.execute(text("""
-                SELECT 
-                    hypertable_name,
-                    total_chunks,
-                    number_compressed_chunks,
-                    uncompressed_heap_size,
-                    compressed_heap_size,
-                    compressed_index_size,
-                    compressed_toast_size
-                FROM timescaledb_information.compression_settings cs
-                JOIN timescaledb_information.hypertables h 
-                    ON cs.hypertable_name = h.hypertable_name
-            """))
-            return [dict(row._mapping) for row in result]
+        try:
+            async with self.engine.begin() as conn:
+                result = await conn.execute(text("""
+                    SELECT 
+                        hypertable_name,
+                        total_chunks,
+                        number_compressed_chunks,
+                        uncompressed_heap_size,
+                        compressed_heap_size,
+                        compressed_index_size,
+                        compressed_toast_size
+                    FROM timescaledb_information.compression_settings cs
+                    JOIN timescaledb_information.hypertables h 
+                        ON cs.hypertable_name = h.hypertable_name
+                """))
+                stats = [dict(row._mapping) for row in result]
+                logger.debug(f"Compression stats retrieved for {len(stats)} hypertables")
+                return stats
+        except Exception as e:
+            logger.error(f"Failed to check compression stats: {e}")
+            raise DatabaseError(f"Compression stats check failed: {e}") from e
+    
+    async def check_connection_pool(self) -> Dict[str, Any]:
+        """Check connection pool statistics."""
+        try:
+            pool = self.engine.pool
+            return {
+                "size": pool.size(),
+                "checked_in": pool.checkedin(),
+                "checked_out": pool.checkedout(),
+                "overflow": pool.overflow(),
+                "total": pool.total()
+            }
+        except Exception as e:
+            logger.error(f"Failed to check connection pool: {e}")
+            return {"error": str(e)}
 
 
 class ArcEvalDBClient:
     """
     High-level database client for Arc-Eval platform.
     Optimized for TimescaleDB features and Modal sandbox integration.
+    
+    Features:
+    - Async connection pooling with health checks
+    - Automatic retry logic with exponential backoff
+    - Comprehensive error handling and logging
+    - Performance monitoring and metrics
+    - Environment-based configuration
     """
     
-    def __init__(self, connection_string: str | None = None):
+    def __init__(self, connection_string: str | None = None, 
+                 enable_monitoring: bool = True,
+                 log_level: str = "INFO"):
+        """
+        Initialize the database client.
+        
+        Args:
+            connection_string: Optional database connection string. 
+                             Falls back to TIMESCALE_SERVICE_URL env var.
+            enable_monitoring: Enable performance monitoring and metrics.
+            log_level: Logging level (DEBUG, INFO, WARNING, ERROR).
+        """
         self.connection_string = connection_string or os.getenv("TIMESCALE_SERVICE_URL")
+        if not self.connection_string:
+            raise ValueError(
+                "No connection string provided. Set TIMESCALE_SERVICE_URL environment variable "
+                "or pass connection_string parameter."
+            )
+        
+        # Configure logging
+        logging.basicConfig(level=getattr(logging, log_level.upper()))
+        
         self.engine = get_engine(self.connection_string)
         self.health = TimescaleDBHealth(self.engine)
+        self.enable_monitoring = enable_monitoring
+        
+        # Performance metrics
+        self._metrics = {
+            "total_queries": 0,
+            "failed_queries": 0,
+            "retry_count": 0,
+            "avg_query_time": 0.0,
+            "last_health_check": None
+        }
+        
+        logger.info(f"ArcEvalDBClient initialized with monitoring={'enabled' if enable_monitoring else 'disabled'}")
     
+    def _update_metrics(self, query_time: float, success: bool, retries: int = 0):
+        """Update internal performance metrics."""
+        if not self.enable_monitoring:
+            return
+        
+        self._metrics["total_queries"] += 1
+        if not success:
+            self._metrics["failed_queries"] += 1
+        self._metrics["retry_count"] += retries
+        
+        # Update average query time
+        current_avg = self._metrics["avg_query_time"]
+        total_queries = self._metrics["total_queries"]
+        self._metrics["avg_query_time"] = (
+            (current_avg * (total_queries - 1) + query_time) / total_queries
+        )
+    
+    def get_metrics(self) -> Dict[str, Any]:
+        """Get current performance metrics."""
+        return {
+            **self._metrics,
+            "success_rate": (
+                (self._metrics["total_queries"] - self._metrics["failed_queries"]) 
+                / self._metrics["total_queries"] * 100
+                if self._metrics["total_queries"] > 0 else 0
+            ),
+            "pool_stats": asyncio.run(self.health.check_connection_pool())
+        }
+    
+    @with_retry(max_attempts=3, delay=1.0)
     async def initialize(self) -> Dict[str, Any]:
         """Initialize database connection and verify TimescaleDB setup."""
+        start_time = asyncio.get_event_loop().time()
+        
         try:
             # Check extensions
             extensions = await self.health.check_extensions()
@@ -144,18 +312,38 @@ class ArcEvalDBClient:
             # Check hypertables
             hypertables = await self.health.check_hypertables()
             
-            return {
+            # Check connection pool
+            pool_stats = await self.health.check_connection_pool()
+            
+            query_time = asyncio.get_event_loop().time() - start_time
+            self._update_metrics(query_time, True)
+            self._metrics["last_health_check"] = datetime.utcnow()
+            
+            result = {
                 "status": "healthy",
                 "extensions": extensions,
                 "hypertables": hypertables,
-                "timestamp": datetime.utcnow().isoformat()
+                "pool_stats": pool_stats,
+                "timestamp": datetime.utcnow().isoformat(),
+                "response_time_ms": query_time * 1000
             }
+            
+            logger.info(f"Database initialized successfully in {query_time*1000:.1f}ms")
+            return result
+            
         except Exception as e:
-            return {
+            query_time = asyncio.get_event_loop().time() - start_time
+            self._update_metrics(query_time, False)
+            
+            error_result = {
                 "status": "error",
                 "error": str(e),
-                "timestamp": datetime.utcnow().isoformat()
+                "timestamp": datetime.utcnow().isoformat(),
+                "response_time_ms": query_time * 1000
             }
+            
+            logger.error(f"Database initialization failed: {e}")
+            return error_result
     
     async def deploy_schema(self) -> Dict[str, Any]:
         """Deploy the complete schema to TimescaleDB."""

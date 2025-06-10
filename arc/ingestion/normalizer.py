@@ -121,7 +121,7 @@ class ConfigNormalizer:
         config["tools_normalized"] = normalized_tools
         
         # Keep original tools list for compatibility
-        if not isinstance(config["tools"][0], str):
+        if config["tools"] and not isinstance(config["tools"][0], str):
             # Extract just the names for the simple list
             config["tools"] = [t["name"] for t in normalized_tools]
             self.enhancements_applied.append("Normalized tool definitions to structured format")

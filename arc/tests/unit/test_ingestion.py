@@ -171,6 +171,19 @@ class TestConfigNormalizer:
         assert result["tools_normalized"][0]["type"] == "function"
         assert result["tools_normalized"][0]["enabled"] is True
     
+    def test_normalize_empty_tools_list(self):
+        """Test normalization with empty tools list doesn't cause IndexError."""
+        config = {
+            "tools": []
+        }
+        # This should not raise an IndexError
+        result = self.normalizer.normalize(config)
+        
+        assert "tools" in result
+        assert result["tools"] == []
+        # tools_normalized is not added for empty tools list
+        assert "tools_normalized" not in result
+    
     def test_add_arc_metadata(self):
         """Test Arc metadata addition."""
         config = {"model": "gpt-4"}

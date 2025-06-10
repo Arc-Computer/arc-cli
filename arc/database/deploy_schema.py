@@ -34,10 +34,10 @@ load_dotenv()
 project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
 
-from arc.database.client import ArcEvalDBClient
+from arc.database.client import ArcDBClient
 
 
-async def verify_connection(client: ArcEvalDBClient) -> Dict[str, Any]:
+async def verify_connection(client: ArcDBClient) -> Dict[str, Any]:
     """Verify database connection and TimescaleDB setup."""
     print("🔍 Verifying TimescaleDB connection...")
     
@@ -53,7 +53,7 @@ async def verify_connection(client: ArcEvalDBClient) -> Dict[str, Any]:
         return status
 
 
-async def deploy_schema(client: ArcEvalDBClient) -> Dict[str, Any]:
+async def deploy_schema(client: ArcDBClient) -> Dict[str, Any]:
     """Deploy the complete TimescaleDB schema."""
     print("\n🚀 Deploying TimescaleDB schema...")
     
@@ -75,7 +75,7 @@ async def deploy_schema(client: ArcEvalDBClient) -> Dict[str, Any]:
     return result
 
 
-async def verify_deployment(client: ArcEvalDBClient) -> Dict[str, Any]:
+async def verify_deployment(client: ArcDBClient) -> Dict[str, Any]:
     """Verify the deployment was successful."""
     print("\n🔎 Verifying deployment...")
     
@@ -176,7 +176,7 @@ async def main():
         print(f"🔗 Connecting to: {conn_info.get('host', 'TimescaleDB Cloud')}")
         
         # Initialize client
-        client = ArcEvalDBClient(conn_info["connection_string"])
+        client = ArcDBClient(conn_info["connection_string"])
         
         # Step 1: Verify connection
         connection_status = await verify_connection(client)
@@ -199,8 +199,8 @@ async def main():
         print("\n🎉 TimescaleDB schema deployment completed successfully!")
         print("\n📋 Next Steps:")
         print("   1. Run the test script: python -m arc.tests.integration.test_database")
-        print("   2. Check the database health with the ArcEvalDBClient.initialize() method") 
-        print("   3. Start using the ArcEvalDBClient in your Modal functions")
+        print("   2. Check the database health with the ArcDBClient.initialize() method") 
+        print("   3. Start using the ArcDBClient in your Modal functions")
         
         await client.close()
         return 0

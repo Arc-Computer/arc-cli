@@ -15,6 +15,7 @@ from typing import Dict, Any, List, Optional, Tuple
 from enum import Enum
 
 from arc.database.client import ArcDBClient, DatabaseError, RetryableError
+from sqlalchemy import text
 
 logger = logging.getLogger(__name__)
 
@@ -103,7 +104,7 @@ class ArcAPI:
             
             # Update with additional fields
             async with self.db.engine.begin() as conn:
-                await conn.execute(self.db.engine.text("""
+                await conn.execute(text("""
                     UPDATE simulations 
                     SET 
                         modal_environment = :modal_environment,
@@ -121,7 +122,7 @@ class ArcAPI:
                 
                 # Create simulation-scenario mappings
                 for i, scenario_id in enumerate(scenario_ids):
-                    await conn.execute(self.db.engine.text("""
+                    await conn.execute(text("""
                         INSERT INTO simulations_scenarios (
                             simulation_id, scenario_id, execution_order, status
                         ) VALUES (:simulation_id, :scenario_id, :order, 'pending')
@@ -178,6 +179,10 @@ class ArcAPI:
             outcome_data = {
                 "simulation_id": simulation_id,
                 "scenario_id": scenario.get("id", "unknown"),
+                "scenario_data": {
+                    "name": scenario.get("name", f"Scenario {scenario.get('id', 'unknown')}"),
+                    "task_prompt": trajectory.get("task_prompt", scenario.get("task_prompt", "Auto-generated scenario"))
+                },
                 "execution_time": datetime.now(timezone.utc),
                 "status": trajectory.get("status", "error"),
                 "reliability_score": reliability_score.get("overall_score", 0.0),
@@ -209,7 +214,7 @@ class ArcAPI:
             
             # Update simulation-scenario status
             async with self.db.engine.begin() as conn:
-                await conn.execute(self.db.engine.text("""
+                await conn.execute(text("""
                     UPDATE simulations_scenarios
                     SET 
                         status = :status,
@@ -224,7 +229,7 @@ class ArcAPI:
                 })
                 
                 # Update simulation completed count
-                await conn.execute(self.db.engine.text("""
+                await conn.execute(text("""
                     UPDATE simulations
                     SET completed_scenarios = completed_scenarios + 1
                     WHERE simulation_id = :simulation_id
@@ -269,6 +274,10 @@ class ArcAPI:
                 outcomes.append({
                     "simulation_id": simulation_id,
                     "scenario_id": scenario.get("id", f"scenario_{i}"),
+                    "scenario_data": {
+                        "name": scenario.get("name", f"Scenario {scenario.get('id', f'scenario_{i}')}"),
+                        "task_prompt": trajectory.get("task_prompt", scenario.get("task_prompt", "Auto-generated scenario"))
+                    },
                     "execution_time": datetime.now(timezone.utc),
                     "status": trajectory.get("status", "error"),
                     "reliability_score": reliability_score.get("overall_score", 0.0),
@@ -303,7 +312,7 @@ class ArcAPI:
                     scenario = result.get("scenario", {})
                     trajectory = result.get("trajectory", {})
                     
-                    await conn.execute(self.db.engine.text("""
+                    await conn.execute(text("""
                         UPDATE simulations_scenarios
                         SET 
                             status = :status,
@@ -318,7 +327,7 @@ class ArcAPI:
                     })
                 
                 # Update simulation completed count
-                await conn.execute(self.db.engine.text("""
+                await conn.execute(text("""
                     UPDATE simulations
                     SET completed_scenarios = completed_scenarios + :count
                     WHERE simulation_id = :simulation_id
@@ -360,7 +369,7 @@ class ArcAPI:
             
             # Update simulation record
             async with self.db.engine.begin() as conn:
-                await conn.execute(self.db.engine.text("""
+                await conn.execute(text("""
                     UPDATE simulations
                     SET 
                         status = 'completed',
@@ -413,7 +422,7 @@ class ArcAPI:
         """
         try:
             async with self.db.engine.begin() as conn:
-                result = await conn.execute(self.db.engine.text("""
+                result = await conn.execute(text("""
                     SELECT 
                         s.simulation_id,
                         s.status,
@@ -518,7 +527,7 @@ class ArcAPI:
             query += " ORDER BY o.execution_time DESC"
             
             async with self.db.engine.begin() as conn:
-                result = await conn.execute(self.db.engine.text(query), params)
+                result = await conn.execute(text(query), params)
                 
                 outcomes = []
                 for row in result:

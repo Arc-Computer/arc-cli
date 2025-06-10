@@ -138,16 +138,17 @@ async def _get_recent_runs(db_client, limit: int = 10) -> list:
     SELECT 
         s.simulation_id,
         s.simulation_name,
-        cv.config_name,
+        c.name as config_name,
         s.created_at,
         s.overall_score,
         s.total_cost_usd,
         COUNT(o.outcome_id) as scenario_count,
         SUM(CASE WHEN o.status = 'success' THEN 1 ELSE 0 END) as success_count
     FROM simulations s
-    JOIN config_versions cv ON s.config_version_id = cv.config_version_id
+    JOIN config_versions cv ON s.config_version_id = cv.version_id
+    JOIN configurations c ON cv.config_id = c.config_id
     JOIN outcomes o ON s.simulation_id = o.simulation_id
-    GROUP BY s.simulation_id, s.simulation_name, cv.config_name, 
+    GROUP BY s.simulation_id, s.simulation_name, c.name, 
              s.created_at, s.overall_score, s.total_cost_usd
     ORDER BY s.created_at DESC
     LIMIT :limit

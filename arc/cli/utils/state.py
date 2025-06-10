@@ -263,6 +263,20 @@ class CLIState:
         with open(run_dir / "recommendations.json", 'w') as f:
             json.dump(recommendations, f, indent=2)
     
+    def save_diff(self, diff_id: str, diff_result: Dict[str, Any]) -> None:
+        """Save A/B test diff results.
+        
+        Args:
+            diff_id: Diff session ID
+            diff_result: Diff comparison data
+        """
+        diffs_dir = self.state_dir / "diffs"
+        diffs_dir.mkdir(exist_ok=True)
+        
+        diff_file = diffs_dir / f"{diff_id}.json"
+        with open(diff_file, 'w') as f:
+            json.dump(diff_result, f, indent=2, default=str)
+    
     def list_runs(self, limit: int = 10) -> List[Dict[str, Any]]:
         """List recent runs.
         

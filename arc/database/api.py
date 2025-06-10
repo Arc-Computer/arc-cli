@@ -126,10 +126,10 @@ class ArcAPI:
                     })
             
             # Ensure scenarios exist before creating simulation
-            for scenario in scenarios:
+            for i, scenario_dict in enumerate(scenario_dicts):
                 await self.db.ensure_scenario_exists(
-                    scenario.get("id", f"scenario_{scenarios.index(scenario)}"),
-                    scenario
+                    scenario_dict.get("id", f"scenario_{i}"),
+                    scenario_dict
                 )
             
             # Create simulation record

@@ -1,6 +1,6 @@
 """Arc recommend command - get improvement recommendations."""
 
-from typing import Any, Optional
+from typing import Any, Optional, Dict
 
 import click
 from rich.table import Table

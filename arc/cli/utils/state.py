@@ -60,15 +60,15 @@ class CLIState:
         self.runs_dir = self.state_dir / "runs"
         self.config_file = self.state_dir / "config.json"
         
+        # Lock file for concurrent access protection
+        self.lock_file = self.state_dir / ".lock"
+        
         # Create directories if they don't exist
         self.state_dir.mkdir(exist_ok=True)
         self.runs_dir.mkdir(exist_ok=True)
         
         # Load or initialize config
         self.config = self._load_config()
-        
-        # Lock file for concurrent access protection
-        self.lock_file = self.state_dir / ".lock"
     
     @contextmanager
     def _file_lock(self, timeout: float = 5.0):

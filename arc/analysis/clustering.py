@@ -135,7 +135,7 @@ class FailureClusterer:
         if not failures:
             return []
         
-        print(f"\nClustering {len(failures)} failures...")
+        logging.info(f"Clustering {len(failures)} failures...")
         start_time = time.time()
         
         # Create feature vectors from failure text

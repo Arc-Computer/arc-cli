@@ -1,9 +1,7 @@
 """Hybrid state management with database and file storage."""
 
 import asyncio
-from datetime import datetime
 from pathlib import Path
-from typing import Dict, Any, Optional
 from uuid import uuid4
 
 from arc.cli.utils.state import CLIState, RunResult
@@ -67,58 +65,58 @@ class HybridState(CLIState):
         Args:
             result: Run result to save
         """
-        async with db_manager.get_client() as db_client:
-            if not db_client:
-                return
-                
-            # Create configuration if not exists
-            config_name = Path(result.config_path).stem
-            config_id = await db_client.create_configuration(
-                name=config_name,
-                user_id=self._user_id,
-                initial_config={"path": result.config_path}  # Simplified for now
-            )
+        db_client = db_manager.get_client()
+        if not db_client:
+            return
             
-            # Create simulation record
-            simulation_id = await db_client.create_simulation(
-                config_version_id=config_id,  # Using config_id directly for now
-                scenario_set=[s.get("scenario_id", f"scenario_{i}") 
-                             for i, s in enumerate(result.scenarios)],
-                simulation_name=result.run_id,
-                simulation_type="evaluation",
-                status="completed",
-                overall_score=result.reliability_score,
-                total_cost_usd=result.total_cost,
-                metadata={
-                    "scenario_count": result.scenario_count,
-                    "success_count": result.success_count,
-                    "failure_count": result.failure_count,
-                    "execution_time": result.execution_time
+        # Create configuration if not exists
+        config_name = Path(result.config_path).stem
+        config_id = await db_client.create_configuration(
+            name=config_name,
+            user_id=self._user_id,
+            initial_config={"path": result.config_path}  # Simplified for now
+        )
+        
+        # Create simulation record
+        simulation_id = await db_client.create_simulation(
+            config_version_id=config_id,  # Using config_id directly for now
+            scenario_set=[s.get("scenario_id", f"scenario_{i}") 
+                         for i, s in enumerate(result.scenarios)],
+            simulation_name=result.run_id,
+            simulation_type="evaluation",
+            status="completed",
+            overall_score=result.reliability_score,
+            total_cost_usd=result.total_cost,
+            metadata={
+                "scenario_count": result.scenario_count,
+                "success_count": result.success_count,
+                "failure_count": result.failure_count,
+                "execution_time": result.execution_time
+            }
+        )
+        
+        # Save outcomes in batch
+        if result.results:
+            outcomes = []
+            for r in result.results:
+                outcome = {
+                    "simulation_id": simulation_id,
+                    "scenario_id": r.get("scenario_id", "unknown"),
+                    "status": "success" if r.get("success") else "error",
+                    "reliability_score": r.get("reliability_score", 1.0 if r.get("success") else 0.0),
+                    "execution_time_ms": int(r.get("execution_time", 0) * 1000),
+                    "tokens_used": r.get("tokens_used", 0),
+                    "cost_usd": r.get("cost", 0.0),
+                    "trajectory": r.get("trajectory", {}),
+                    "modal_call_id": r.get("modal_call_id"),
+                    "error_code": r.get("error_code"),
+                    "error_category": categorize_error(r.get("failure_reason"))
                 }
-            )
+                outcomes.append(outcome)
             
-            # Save outcomes in batch
-            if result.results:
-                outcomes = []
-                for r in result.results:
-                    outcome = {
-                        "simulation_id": simulation_id,
-                        "scenario_id": r.get("scenario_id", "unknown"),
-                        "status": "success" if r.get("success") else "error",
-                        "reliability_score": r.get("reliability_score", 1.0 if r.get("success") else 0.0),
-                        "execution_time_ms": int(r.get("execution_time", 0) * 1000),
-                        "tokens_used": r.get("tokens_used", 0),
-                        "cost_usd": r.get("cost", 0.0),
-                        "trajectory": r.get("trajectory", {}),
-                        "modal_call_id": r.get("modal_call_id"),
-                        "error_code": r.get("error_code"),
-                        "error_category": categorize_error(r.get("failure_reason"))
-                    }
-                    outcomes.append(outcome)
-                
-                await db_client.record_outcomes_batch(outcomes)
-            
-            console.print(f"Run {result.run_id} saved to database", style="success")
+            await db_client.record_outcomes_batch(outcomes)
+        
+        console.print(f"Run {result.run_id} saved to database", style="success")
     
     def save_run(self, result: RunResult) -> Path:
         """Synchronous wrapper for save_run_async.

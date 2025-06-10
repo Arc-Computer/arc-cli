@@ -1,6 +1,6 @@
 """Arc recommend command - get improvement recommendations."""
 
-from typing import Any, Optional, Dict
+from typing import Any, Optional
 
 import click
 from rich.table import Table
@@ -140,7 +140,7 @@ def recommend(run_id: Optional[str], json_output: bool):
         raise click.Exit(1)
 
 
-def _generate_recommendations(run_result) -> Dict[str, Any]:
+def _generate_recommendations(run_result) -> dict[str, Any]:
     """Generate recommendations based on run and analysis."""
     recommendations = {
         "run_id": run_result.run_id,

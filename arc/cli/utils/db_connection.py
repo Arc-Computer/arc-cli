@@ -1,8 +1,6 @@
 """Database connection manager for Arc CLI."""
 
 import os
-from typing import Optional
-from contextlib import asynccontextmanager
 
 from arc.database.client import ArcDBClient
 from arc.cli.utils.console import ArcConsole
@@ -15,10 +13,10 @@ class DatabaseConnectionManager:
     
     def __init__(self):
         """Initialize the connection manager."""
-        self._client: Optional[ArcDBClient] = None
+        self._client: ArcDBClient | None = None
         self._is_connected = False
         self._connection_url = os.environ.get("TIMESCALE_SERVICE_URL")
-        
+    
     @property
     def is_available(self) -> bool:
         """Check if database connection is available."""
@@ -57,17 +55,16 @@ class DatabaseConnectionManager:
             await self._client.close()
             self._is_connected = False
     
-    @asynccontextmanager
-    async def get_client(self):
-        """Get database client with automatic connection management.
+    def get_client(self):
+        """Get database client if available.
         
-        Yields:
+        Returns:
             ArcDBClient if connected, None otherwise
         """
         if self._is_connected and self._client:
-            yield self._client
+            return self._client
         else:
-            yield None
+            return None
     
     async def health_check(self) -> bool:
         """Perform health check on database connection.

@@ -31,17 +31,17 @@ state = None
 async def _initialize_state():
     """Initialize state with database connection if available."""
     global state
-    
+
     # Try to initialize database connection
     db_connected = await db_manager.initialize()
-    
+
     if db_connected:
         # Use hybrid state with database
         state = HybridState(db_connected=True)
     else:
         # Fall back to file-only state
         state = CLIState()
-    
+
     return db_connected
 
 
@@ -64,7 +64,7 @@ def run(config_path: str, scenarios: int, json_output: bool, no_confirm: bool, p
         arc run finance_agent_v1.yaml
     """
     # Initialize state with database connection
-    db_connected = asyncio.run(_initialize_state())
+    asyncio.run(_initialize_state())
     
     config_path = Path(config_path)
     run_id = f"run_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid4().hex[:8]}"
@@ -503,17 +503,16 @@ def _execute_with_modal(
                     trajectory = result.get("trajectory", {})
                     reliability_score = result.get("reliability_score", {})
                     detailed_trajectory = result.get("detailed_trajectory", {})
-                    
+
                     # Calculate cost from token usage
                     token_usage = trajectory.get("token_usage", {})
                     cost = token_usage.get("total_cost", 0.0)
-                    
+
                     # Determine success based on reliability score
                     success = reliability_score.get("overall_score", 0) >= 0.7
-                    
+
                     # Get Modal execution ID if available
                     modal_call_id = os.environ.get("MODAL_FUNCTION_CALL_ID")
-                    
                     results.append({
                         "scenario_id": scenario.get("id", f"scenario_{result.get('scenario_index', 0)}"),
                         "success": success,
@@ -554,17 +553,16 @@ def _execute_with_modal(
             trajectory = result.get("trajectory", {})
             reliability_score = result.get("reliability_score", {})
             detailed_trajectory = result.get("detailed_trajectory", {})
-            
+
             # Calculate cost from token usage
             token_usage = trajectory.get("token_usage", {})
             cost = token_usage.get("total_cost", 0.0)
-            
+
             # Determine success based on reliability score
             success = reliability_score.get("overall_score", 0) >= 0.7
-            
+
             # Get Modal execution ID if available
             modal_call_id = os.environ.get("MODAL_FUNCTION_CALL_ID")
-            
             results.append({
                 "scenario_id": scenario.get("id", f"scenario_{result.get('scenario_index', 0)}"),
                 "success": success,

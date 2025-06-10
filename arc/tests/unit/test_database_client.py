@@ -322,14 +322,14 @@ class TestArcDBClient:
         mock_conn = AsyncMock()
         mock_engine.begin.return_value.__aenter__.return_value = mock_conn
         
-        config_id = await client.create_configuration(
+        version_id = await client.create_configuration(
             name="test_config",
             user_id="test_user",
             initial_config={"model": "gpt-4", "temperature": 0.7}
         )
         
         # Verify UUID format
-        uuid.UUID(config_id)  # Will raise if invalid
+        uuid.UUID(version_id)  # Will raise if invalid
         
         # Verify execute was called twice (config and version)
         assert mock_conn.execute.call_count == 2

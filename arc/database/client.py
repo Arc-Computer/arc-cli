@@ -442,7 +442,16 @@ class ArcDBClient:
     # Configuration Management
     async def create_configuration(self, name: str, user_id: str, 
                                  initial_config: Dict[str, Any]) -> str:
-        """Create a new configuration with initial version."""
+        """Create a new configuration with initial version.
+        
+        Args:
+            name: Configuration name
+            user_id: User ID who created the configuration
+            initial_config: Initial configuration dictionary
+            
+        Returns:
+            str: The version_id of the created configuration version
+        """
         config_id = str(uuid.uuid4())
         version_id = str(uuid.uuid4())
         
@@ -476,7 +485,7 @@ class ArcDBClient:
                 "config_hash": config_hash
             })
         
-        return config_id
+        return version_id
     
     # Simulation Management
     async def create_simulation(self, config_version_id: str, scenario_set: List[str],
@@ -544,11 +553,71 @@ class ArcDBClient:
                     "completed_at": completed_at or datetime.utcnow(),
                 },
             )
-    
+
+    # Scenario Management
+    async def ensure_scenario_exists(self, scenario_id: str, scenario_data: Optional[Dict[str, Any]] = None) -> None:
+        """Ensure a scenario exists in the database, creating it if necessary."""
+        async with self.engine.begin() as conn:
+            # Check if scenario exists
+            result = await conn.execute(text(
+                "SELECT 1 FROM scenarios WHERE scenario_id = :scenario_id"
+            ), {"scenario_id": scenario_id})
+            
+            if result.fetchone() is None:
+                # Create minimal scenario record
+                scenario_name = scenario_data.get("name", f"Generated Scenario {scenario_id}") if scenario_data else f"Generated Scenario {scenario_id}"
+                task_prompt = scenario_data.get("task_prompt", "Auto-generated test scenario") if scenario_data else "Auto-generated test scenario"
+                
+                await conn.execute(text("""
+                    INSERT INTO scenarios (scenario_id, name, task_prompt, difficulty_level, is_active)
+                    VALUES (:scenario_id, :name, :task_prompt, 'medium', true)
+                    ON CONFLICT (scenario_id) DO NOTHING
+                """), {
+                    "scenario_id": scenario_id,
+                    "name": scenario_name[:200],  # Respect length constraint
+                    "task_prompt": task_prompt
+                })
+
     # Outcome Recording (Optimized for TimescaleDB hypertable)
+    def _validate_trajectory(self, trajectory: Dict[str, Any]) -> None:
+        """Validate trajectory data meets database constraints."""
+        if not isinstance(trajectory, dict):
+            raise ValueError("Trajectory must be a dictionary")
+        
+        # Check required fields
+        if "start_time" not in trajectory:
+            raise ValueError(
+                "Trajectory missing required field 'start_time'. "
+                "Must be ISO 8601 timestamp (e.g., '2024-06-10T14:30:00Z')"
+            )
+        
+        if "status" not in trajectory:
+            raise ValueError(
+                "Trajectory missing required field 'status'. "
+                "Must be one of: 'success', 'error', 'timeout', 'cancelled'"
+            )
+        
+        # Validate status value
+        valid_statuses = {'success', 'error', 'timeout', 'cancelled'}
+        if trajectory["status"] not in valid_statuses:
+            raise ValueError(
+                f"Invalid trajectory status '{trajectory['status']}'. "
+                f"Must be one of: {', '.join(sorted(valid_statuses))}"
+            )
+
     async def record_outcome(self, outcome_data: Dict[str, Any]) -> str:
         """Record individual scenario outcome to TimescaleDB hypertable."""
         outcome_id = str(uuid.uuid4())
+        
+        # Validate trajectory data
+        if "trajectory" in outcome_data:
+            self._validate_trajectory(outcome_data["trajectory"])
+        
+        # Ensure scenario exists before recording outcome
+        await self.ensure_scenario_exists(
+            outcome_data["scenario_id"], 
+            outcome_data.get("scenario_data")
+        )
         
         async with self.engine.begin() as conn:
             await conn.execute(text("""
@@ -588,6 +657,15 @@ class ArcDBClient:
     async def record_outcomes_batch(self, outcomes: List[Dict[str, Any]]) -> List[str]:
         """Batch insert outcomes for high-throughput Modal executions."""
         outcome_ids = [str(uuid.uuid4()) for _ in outcomes]
+
+        # Validate all trajectories and ensure scenarios exist
+        for outcome in outcomes:
+            if "trajectory" in outcome:
+                self._validate_trajectory(outcome["trajectory"])
+            await self.ensure_scenario_exists(
+                outcome["scenario_id"],
+                outcome.get("scenario_data")
+            )
         
         batch_data = []
         for i, outcome in enumerate(outcomes):

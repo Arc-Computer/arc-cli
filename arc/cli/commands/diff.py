@@ -259,25 +259,31 @@ async def _diff_async(config1: str, config2: str, scenarios: int, historical: bo
             # Statistical validation
             console.print_header("Statistical Validation")
             
-            # Sample size warning if applicable
-            if analysis.get("sample_size_warning"):
-                console.print(format_warning(analysis["sample_size_warning"]))
+            # Display statistical warnings
+            statistical_warnings = analysis.get("statistical_warnings", [])
+            if statistical_warnings:
+                for warning in statistical_warnings:
+                    console.print(format_warning(warning))
                 console.print()
-            
-            if analysis["significant"]:
-                console.print(format_success(f"✓ Difference is statistically significant (p = {analysis['p_value']:.4f})"))
+
+            # Statistical significance (only if we have a valid test)
+            if analysis.get("valid_statistical_test", False):
+                if analysis["significant"]:
+                    console.print(format_success(f"✓ Difference is statistically significant (p = {analysis['p_value']:.4f})"))
+                else:
+                    console.print(format_warning(f"Difference is NOT statistically significant (p = {analysis['p_value']:.4f})"))
             else:
-                console.print(format_warning(f"Difference is NOT statistically significant (p = {analysis['p_value']:.4f})"))
-            
-            console.print_metric("Test type", analysis.get("test_type", "chi-square"))
-            console.print_metric("Effect size (Cohen's h)", f"{analysis['effect_size']:.2f} ({analysis['interpretation']})") 
+                console.print(format_warning("Statistical significance test could not be performed"))
+
+            console.print_metric("Test type", analysis.get("test_type", "unknown"))
+            console.print_metric("Effect size (Cohen's h)", f"{analysis['effect_size']:.2f} ({analysis['interpretation']})")
             console.print_metric("Confidence interval", f"[{analysis['ci_lower']:.1%}, {analysis['ci_upper']:.1%}]")
             if analysis.get("power") is not None:
                 console.print_metric("Statistical power", f"{analysis['power']:.2f}")
             console.print()
-            
+
             # Interpretation
-            if analysis["significant"] and rel_diff > 0:
+            if analysis.get("significant") and rel_diff > 0:
                 relative_improvement = (rel_diff/reliability_a*100) if reliability_a > 0 else float('inf')
                 console.print(Panel.fit(
                     f"[success]Config B shows a {rel_diff*100:.1f} percentage point improvement[/success]\n"
@@ -285,7 +291,7 @@ async def _diff_async(config1: str, config2: str, scenarios: int, historical: bo
                     title="Conclusion",
                     border_style="success"
                 ))
-            elif analysis["significant"] and rel_diff < 0:
+            elif analysis.get("significant") and rel_diff < 0:
                 relative_decrease = abs(rel_diff/reliability_a*100) if reliability_a > 0 else float('inf')
                 console.print(Panel.fit(
                     f"[error]Config B shows a {abs(rel_diff)*100:.1f} percentage point regression[/error]\n"
@@ -400,16 +406,43 @@ def _perform_statistical_analysis(results_a: list, results_b: list) -> Dict[str,
     p_b = sum(successes_b) / n_b if n_b > 0 else 0
     
     # Use chi-square test for proportions (more appropriate than t-test for binary data)
-    from scipy.stats import chi2_contingency
+    from scipy.stats import fisher_exact
+    
     contingency_table = [
         [sum(successes_a), n_a - sum(successes_a)],
         [sum(successes_b), n_b - sum(successes_b)]
     ]
-    chi2, p_value, dof, expected = chi2_contingency(contingency_table)
+    
+    # Validate chi-square test assumptions
+    # Expected frequencies should be at least 5 in each cell
+    try:
+        chi2, p_value_chi2, dof, expected = chi2_contingency(contingency_table)
+        
+        # Check if all expected frequencies are >= 5
+        min_expected = np.min(expected)
+        if min_expected < 5:
+            # Use Fisher's exact test for small samples
+            if len(contingency_table) == 2 and len(contingency_table[0]) == 2:
+                oddsratio, p_value = fisher_exact(contingency_table)
+                test_type = "fisher_exact"
+                chi2 = None  # Not applicable for Fisher's exact
+            else:
+                # For very small samples, just report descriptive statistics
+                p_value = None
+                test_type = "descriptive_only"
+                chi2 = None
+        else:
+            p_value = p_value_chi2
+            test_type = "chi_square"
+            
+    except (ValueError, ZeroDivisionError):
+        # Handle edge cases where chi-square test cannot be performed
+        p_value = None
+        test_type = "insufficient_data"
+        chi2 = None
     
     # Calculate effect size (Cohen's h for proportions)
     # h = 2 * (arcsin(sqrt(p1)) - arcsin(sqrt(p2)))
-    import numpy as np
     h = 2 * (np.arcsin(np.sqrt(p_b)) - np.arcsin(np.sqrt(p_a)))
     
     # Calculate confidence interval for difference in proportions
@@ -429,9 +462,24 @@ def _perform_statistical_analysis(results_a: list, results_b: list) -> Dict[str,
     else:
         power = None
     
+    # Determine significance based on available test
+    significant = p_value < 0.05 if p_value is not None else None
+    
+    # Add additional warnings for statistical validity
+    statistical_warnings = []
+    if sample_size_warning:
+        statistical_warnings.append(sample_size_warning)
+    
+    if test_type == "fisher_exact":
+        statistical_warnings.append("Used Fisher's exact test due to small expected frequencies.")
+    elif test_type == "descriptive_only":
+        statistical_warnings.append("Statistical test not performed due to insufficient data. Results are descriptive only.")
+    elif test_type == "insufficient_data":
+        statistical_warnings.append("Insufficient data for statistical analysis. Increase sample size.")
+    
     return {
         "p_value": p_value,
-        "significant": p_value < 0.05,
+        "significant": significant,
         "effect_size": h,
         "ci_lower": ci_lower,
         "ci_upper": ci_upper,
@@ -440,9 +488,11 @@ def _perform_statistical_analysis(results_a: list, results_b: list) -> Dict[str,
         "sample_size_b": n_b,
         "power": power,
         "sample_size_warning": sample_size_warning,
-        "test_type": "chi-square",
+        "statistical_warnings": statistical_warnings,
+        "test_type": test_type,
         "reliability_a": p_a,
-        "reliability_b": p_b
+        "reliability_b": p_b,
+        "valid_statistical_test": p_value is not None
     }
 
 

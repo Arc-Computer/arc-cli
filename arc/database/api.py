@@ -15,6 +15,7 @@ from typing import Dict, Any, List, Optional, Tuple
 from enum import Enum
 
 from sqlalchemy import text
+
 from arc.database.client import ArcDBClient, DatabaseError, RetryableError
 
 logger = logging.getLogger(__name__)
@@ -124,6 +125,13 @@ class ArcAPI:
                         "task_prompt": task_prompt
                     })
             
+            # Ensure scenarios exist before creating simulation
+            for scenario in scenarios:
+                await self.db.ensure_scenario_exists(
+                    scenario.get("id", f"scenario_{scenarios.index(scenario)}"),
+                    scenario
+                )
+            
             # Create simulation record
             simulation_id = await self.db.create_simulation(
                 config_version_id=config_version_id,
@@ -202,25 +210,42 @@ class ArcAPI:
             # Extract data from scenario result structure
             scenario = scenario_result.get("scenario", {})
             trajectory = scenario_result.get("trajectory", {})
-            reliability_score = scenario_result.get("reliability_score", {})
+            
+            # Handle reliability_score that could be dict or float
+            rs = scenario_result.get("reliability_score", {})
+            if isinstance(rs, dict):
+                overall_score = rs.get("overall_score", 0.0)
+                dimension_scores = rs.get("dimension_scores", {})
+                grade = rs.get("grade", "N/A")
+            else:  # float or other type
+                overall_score = float(rs) if rs else 0.0
+                dimension_scores = {}
+                grade = "N/A"
+            
             detailed_trajectory = scenario_result.get("detailed_trajectory", {})
             
             # Prepare outcome data
             outcome_data = {
                 "simulation_id": simulation_id,
                 "scenario_id": scenario.get("id", "unknown"),
+                "scenario_data": {
+                    "name": scenario.get("name", f"Scenario {scenario.get('id', 'unknown')}"),
+                    "task_prompt": trajectory.get("task_prompt", scenario.get("task_prompt", "Auto-generated scenario"))
+                },
                 "execution_time": datetime.now(timezone.utc),
                 "status": trajectory.get("status", "error"),
-                "reliability_score": reliability_score.get("overall_score", 0.0),
+                "reliability_score": overall_score,
                 "execution_time_ms": int(trajectory.get("execution_time_seconds", 0) * 1000),
                 "tokens_used": trajectory.get("token_usage", {}).get("total_tokens", 0),
                 "cost_usd": trajectory.get("token_usage", {}).get("total_cost", 0.0),
                 "trajectory": {
+                    "start_time": trajectory.get("start_time", datetime.now(timezone.utc).isoformat()),
+                    "status": trajectory.get("status", "error"),
                     "task_prompt": trajectory.get("task_prompt"),
                     "final_response": trajectory.get("final_response"),
                     "full_trajectory": trajectory.get("full_trajectory", []),
                     "detailed_trajectory": detailed_trajectory,
-                    "reliability_dimensions": reliability_score.get("dimension_scores", {})
+                    "reliability_dimensions": dimension_scores
                 },
                 "modal_call_id": modal_call_id,
                 "sandbox_id": sandbox_id,
@@ -230,8 +255,8 @@ class ArcAPI:
                     "prompt_tokens": trajectory.get("token_usage", {}).get("prompt_tokens", 0),
                     "completion_tokens": trajectory.get("token_usage", {}).get("completion_tokens", 0),
                     "trajectory_event_count": trajectory.get("trajectory_event_count", 0),
-                    "reliability_grade": reliability_score.get("grade", "N/A"),
-                    **reliability_score.get("dimension_scores", {})
+                    "reliability_grade": grade,
+                    **dimension_scores
                 }
             }
             
@@ -245,6 +270,7 @@ class ArcAPI:
                     SET 
                         status = :status,
                         modal_call_id = :modal_call_id,
+                        started_at = COALESCE(started_at, NOW()),
                         completed_at = NOW()
                     WHERE simulation_id = :simulation_id AND scenario_id = :scenario_id
                 """), {
@@ -294,24 +320,41 @@ class ArcAPI:
             for i, result in enumerate(scenario_results):
                 scenario = result.get("scenario", {})
                 trajectory = result.get("trajectory", {})
-                reliability_score = result.get("reliability_score", {})
+                
+                # Handle reliability_score that could be dict or float
+                rs = result.get("reliability_score", {})
+                if isinstance(rs, dict):
+                    overall_score = rs.get("overall_score", 0.0)
+                    dimension_scores = rs.get("dimension_scores", {})
+                    grade = rs.get("grade", "N/A")
+                else:  # float or other type
+                    overall_score = float(rs) if rs else 0.0
+                    dimension_scores = {}
+                    grade = "N/A"
+                
                 detailed_trajectory = result.get("detailed_trajectory", {})
                 
                 outcomes.append({
                     "simulation_id": simulation_id,
                     "scenario_id": scenario.get("id", f"scenario_{i}"),
+                    "scenario_data": {
+                        "name": scenario.get("name", f"Scenario {scenario.get('id', f'scenario_{i}')}"),
+                        "task_prompt": trajectory.get("task_prompt", scenario.get("task_prompt", "Auto-generated scenario"))
+                    },
                     "execution_time": datetime.now(timezone.utc),
                     "status": trajectory.get("status", "error"),
-                    "reliability_score": reliability_score.get("overall_score", 0.0),
+                    "reliability_score": overall_score,
                     "execution_time_ms": int(trajectory.get("execution_time_seconds", 0) * 1000),
                     "tokens_used": trajectory.get("token_usage", {}).get("total_tokens", 0),
                     "cost_usd": trajectory.get("token_usage", {}).get("total_cost", 0.0),
                     "trajectory": {
+                        "start_time": trajectory.get("start_time", datetime.now(timezone.utc).isoformat()),
+                        "status": trajectory.get("status", "error"),
                         "task_prompt": trajectory.get("task_prompt"),
                         "final_response": trajectory.get("final_response"),
                         "full_trajectory": trajectory.get("full_trajectory", []),
                         "detailed_trajectory": detailed_trajectory,
-                        "reliability_dimensions": reliability_score.get("dimension_scores", {})
+                        "reliability_dimensions": dimension_scores
                     },
                     "modal_call_id": modal_call_ids[i] if modal_call_ids else None,
                     "error_code": trajectory.get("error") if trajectory.get("status") == "error" else None,
@@ -320,8 +363,8 @@ class ArcAPI:
                         "prompt_tokens": trajectory.get("token_usage", {}).get("prompt_tokens", 0),
                         "completion_tokens": trajectory.get("token_usage", {}).get("completion_tokens", 0),
                         "trajectory_event_count": trajectory.get("trajectory_event_count", 0),
-                        "reliability_grade": reliability_score.get("grade", "N/A"),
-                        **reliability_score.get("dimension_scores", {})
+                        "reliability_grade": grade,
+                        **dimension_scores
                     }
                 })
             
@@ -339,6 +382,7 @@ class ArcAPI:
                         SET 
                             status = :status,
                             modal_call_id = :modal_call_id,
+                            started_at = COALESCE(started_at, NOW()),
                             completed_at = NOW()
                         WHERE simulation_id = :simulation_id AND scenario_id = :scenario_id
                     """), {

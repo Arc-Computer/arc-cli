@@ -70,25 +70,67 @@ class CLIState:
         # Load or initialize config
         self.config = self._load_config()
     
+    def _cleanup_stale_lock(self, max_age_seconds: int = 300):
+        """Clean up stale lock files older than max_age_seconds."""
+        if not self.lock_file.exists():
+            return
+
+        try:
+            with open(self.lock_file, 'r') as f:
+                lines = f.read().strip().split('\n')
+                if len(lines) >= 2:
+                    # Check if lock is older than max_age
+                    lock_timestamp = int(lines[1])
+                    if time.time() - lock_timestamp > max_age_seconds:
+                        self.lock_file.unlink()
+                        return
+                else:
+                    # Malformed lock file, remove it
+                    self.lock_file.unlink()
+                    return
+        except (OSError, ValueError, IndexError):
+            # Lock file is corrupted or unreadable, remove it
+            try:
+                self.lock_file.unlink()
+            except OSError:
+                pass  # Already removed or permission issue
+
     @contextmanager
-    def _file_lock(self, timeout: float = 5.0):
+    def _file_lock(self, timeout: float = 30.0):
         """Acquire file lock for concurrent access protection."""
         lock_acquired = False
         start_time = time.time()
-        
+
         # Create lock file if it doesn't exist
         self.lock_file.touch(exist_ok=True)
-        
-        with open(self.lock_file, 'w') as lock_fd:
+
+        # Check for and clean up stale locks
+        self._cleanup_stale_lock()
+
+        with open(self.lock_file, 'a+') as lock_fd:
             while True:
                 try:
                     fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    # Write PID/timestamp after acquiring lock
+                    lock_fd.seek(0)
+                    lock_fd.truncate()
+                    lock_fd.write(f"{os.getpid()}\n{int(time.time())}\n")
+                    lock_fd.flush()
                     lock_acquired = True
                     break
-                except IOError:
-                    if time.time() - start_time > timeout:
-                        raise RuntimeError("Could not acquire file lock - another Arc process may be running")
-                    time.sleep(0.1)
+                except OSError:
+                    elapsed = time.time() - start_time
+                    if elapsed > timeout:
+                        # Provide helpful error message with suggestions
+                        raise RuntimeError(
+                            f"Could not acquire file lock after {timeout:.1f}s. "
+                            f"This may indicate:\n"
+                            f"  • Another Arc process is running\n"
+                            f"  • A previous process crashed and left a stale lock\n"
+                            f"  • Try: rm {self.lock_file} to force cleanup\n"
+                            f"  • Or wait for the current operation to complete"
+                        ) from None
+                    time.sleep(0.2)  # Less aggressive polling
             
             try:
                 yield

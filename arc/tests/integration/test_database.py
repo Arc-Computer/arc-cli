@@ -84,7 +84,7 @@ class TimescaleDBTester:
         try:
             # Create test configuration with proper UUID
             test_user_id = str(uuid.uuid4())
-            config_id = await self.client.create_configuration(
+            version_id = await self.client.create_configuration(
                 name="test_gpt4_config",
                 user_id=test_user_id,
                 initial_config={
@@ -95,26 +95,11 @@ class TimescaleDBTester:
                 }
             )
             
-            # Get the version_id for this configuration
-            async with self.client.engine.begin() as conn:
-                result = await conn.execute(text("""
-                    SELECT version_id FROM config_versions 
-                    WHERE config_id = :config_id 
-                    ORDER BY version_number DESC LIMIT 1
-                """), {"config_id": config_id})
-                version_row = result.fetchone()
-                # Handle UUID object properly
-                version_id = str(version_row[0]) if version_row else None
-            
-            if not version_id:
-                return {"status": "failed", "error": "Could not retrieve version_id"}
-            
-            self.test_data["config_id"] = config_id
             self.test_data["version_id"] = version_id
             self.test_data["user_id"] = test_user_id
-            print(f"✅ Created configuration: {config_id[:8]}... (version: {version_id[:8]}...)")
+            print(f"✅ Created configuration with version: {version_id[:8]}...")
             
-            return {"status": "passed", "config_id": config_id, "version_id": version_id}
+            return {"status": "passed", "version_id": version_id}
             
         except Exception as e:
             return {"status": "failed", "error": str(e)}
@@ -347,7 +332,7 @@ class TimescaleDBTester:
                 # First create a test configuration if we don't have one
                 if "version_id" not in self.test_data:
                     test_user_id = str(uuid.uuid4())
-                    config_id = await self.client.create_configuration(
+                    version_id = await self.client.create_configuration(
                         name="modal_test_config",
                         user_id=test_user_id,
                         initial_config={
@@ -357,19 +342,6 @@ class TimescaleDBTester:
                             "tools": ["modal_test"]
                         }
                     )
-                    
-                    # Get version_id
-                    async with self.client.engine.begin() as conn:
-                        result = await conn.execute(text("""
-                            SELECT version_id FROM config_versions 
-                            WHERE config_id = :config_id 
-                            ORDER BY version_number DESC LIMIT 1
-                        """), {"config_id": config_id})
-                        version_row = result.fetchone()
-                        version_id = str(version_row[0]) if version_row else None
-                    
-                    if not version_id:
-                        return {"status": "failed", "error": "Could not create test configuration"}
                     
                     self.test_data["version_id"] = version_id
                 

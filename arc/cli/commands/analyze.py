@@ -192,10 +192,11 @@ async def _get_historical_patterns(db_client, days: int) -> dict:
         COUNT(*) as occurrence_count,
         COUNT(DISTINCT s.simulation_id) as affected_runs,
         AVG(o.cost_usd) as avg_cost,
-        STRING_AGG(DISTINCT cv.config_name, ', ' ORDER BY cv.config_name) as affected_configs
+        STRING_AGG(DISTINCT c.name, ', ' ORDER BY c.name) as affected_configs
     FROM outcomes o
     JOIN simulations s ON o.simulation_id = s.simulation_id
-    JOIN config_versions cv ON s.config_version_id = cv.config_version_id
+    JOIN config_versions cv ON s.config_version_id = cv.version_id
+    JOIN configurations c ON cv.config_id = c.config_id
     WHERE o.status = 'error' 
         AND s.created_at >= :start_date 
         AND s.created_at <= :end_date
@@ -233,25 +234,27 @@ async def _get_cross_run_insights(db_client, config_path: str, days: int) -> dic
     """Get insights across multiple runs for the same config."""
     config_name = config_path.split("/")[-1]
     
-    query = text("""
-    SELECT 
+    # Use string formatting for interval since PostgreSQL doesn't allow parameters in INTERVAL
+    query = text(f"""
+    SELECT
         s.simulation_name,
         s.created_at,
         s.overall_score,
         COUNT(CASE WHEN o.status = 'error' THEN 1 END) as failure_count,
         STRING_AGG(DISTINCT o.error_category, ', ' ORDER BY o.error_category) as error_categories
     FROM simulations s
-    JOIN config_versions cv ON s.config_version_id = cv.config_version_id
+    JOIN config_versions cv ON s.config_version_id = cv.version_id
+    JOIN configurations c ON cv.config_id = c.config_id
     JOIN outcomes o ON s.simulation_id = o.simulation_id
-    WHERE cv.config_name = :config_name
-        AND s.created_at >= NOW() - INTERVAL :days || ' days'
+    WHERE c.name = :config_name
+        AND s.created_at >= NOW() - INTERVAL '{days} days'
     GROUP BY s.simulation_id, s.simulation_name, s.created_at, s.overall_score
     ORDER BY s.created_at DESC
     LIMIT 10
     """)
-    
+
     async with db_client.engine.begin() as conn:
-        result = await conn.execute(query, {"config_name": config_name, "days": str(days)})
+        result = await conn.execute(query, {"config_name": config_name})
         
     runs = []
     for row in result:

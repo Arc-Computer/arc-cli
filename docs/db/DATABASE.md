@@ -467,7 +467,7 @@ SELECT
     COUNT(*) AS usage_count
 FROM tool_usage
 GROUP BY day, tool_name;
-```
+```sql
 
 ### C. Optimized Indexes for TimescaleDB
 ```sql
@@ -517,7 +517,7 @@ CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_recommendations_pending_confidence
 CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_failure_patterns_cluster_time 
     ON failure_patterns(pattern_cluster_id, execution_time DESC) 
     WHERE pattern_cluster_id IS NOT NULL;
-```
+```sql
 
 ---
 
@@ -548,7 +548,7 @@ POOL_CONFIG = {
     "max_queries": 50000,
     "max_inactive_connection_lifetime": 300
 }
-```
+```sql
 
 ### B. Modal Integration Settings
 ```python
@@ -564,7 +564,7 @@ MODAL_CONFIG = {
     "retries": 3,
     "concurrency_limit": 100  # Max parallel executions
 }
-```
+```sql
 
 ### C. Retention Policies
 ```sql
@@ -634,7 +634,7 @@ FROM outcomes
 WHERE execution_time > NOW() - INTERVAL '6 months'
 GROUP BY scenario_id, week
 ORDER BY week DESC, avg_reliability ASC;
-```
+```sql
 
 ### B. LLM Recommendation Functions
 ```sql
@@ -679,7 +679,7 @@ BEGIN
     RETURN session_id;
 END;
 $$ LANGUAGE plpgsql;
-```
+```sql
 
 ---
 
@@ -742,7 +742,7 @@ FROM outcomes
 WHERE execution_time > NOW() - INTERVAL '30 days'
 GROUP BY day
 ORDER BY day DESC;
-```
+```sql
 
 ### B. Cost and Usage Analytics
 ```sql
@@ -762,7 +762,7 @@ JOIN config_versions cv ON s.config_version_id = cv.version_id
 WHERE o.execution_time > NOW() - INTERVAL '30 days'
 GROUP BY day, cv.parsed_config->>'model'
 ORDER BY day DESC, total_cost DESC;
-```
+```sql
 
 ---
 
@@ -788,7 +788,7 @@ ORDER BY day DESC, total_cost DESC;
 -- psql -h your-instance.timescaledb.cloud -U tsdbadmin -d arc_eval_production -c "
 -- COPY outcomes FROM 'outcomes.csv' WITH CSV HEADER;
 -- "
-```
+```sql
 
 ### B. Production Checklist for TimescaleDB
 - [ ] **TimescaleDB Cloud Instance**: Created with appropriate tier (>=4GB RAM)
@@ -891,7 +891,7 @@ async def execute_scenario(scenario_id: str, config_id: str):
             "error_message": str(e),
             "failure_category": classify_error(e)
         })
-```
+```sql
 
 ### B. Event-Driven Data Flow
 ```python
@@ -956,7 +956,7 @@ async def run_scenario_evaluation(scenario_id: str, config_id: str):
         "trajectory": result.trajectory,
         "modal_call_id": modal.current_call_id()
     })
-```
+```sql
 
 ### C. Configuration Management API
 ```python
@@ -1004,7 +1004,7 @@ class ConfigurationManager:
             "parsed_config": config_data,
             "generated_by": "modal_sandbox"
         })
-```
+```sql
 
 ---
 
@@ -1050,7 +1050,7 @@ class BatchExecutionRecorder:
         """, self.outcome_buffer)
         
         self.outcome_buffer.clear()
-```
+```sql
 
 ### B. Flexible Schema Evolution
 ```sql
@@ -1087,7 +1087,7 @@ CREATE INDEX IF NOT EXISTS idx_outcomes_metadata_gin
         "new_feature_flag": true
     }
 }
-```
+```sql
 
 ### C. Health Check and Monitoring
 ```python
@@ -1149,7 +1149,7 @@ class DatabaseHealthChecker:
             "compression_ratio": result["compression_ratio"],
             "storage_efficiency": "good" if result["compression_ratio"] > 2 else "needs_attention"
         }
-```
+```sql
 
 ---
 
@@ -1172,7 +1172,7 @@ PORT="5432"
 DATABASE="arc_eval_production"
 USER="tsdbadmin"
 PASSWORD="your-generated-password"
-```
+```sql
 
 ### B. Schema Deployment
 ```bash
@@ -1188,7 +1188,7 @@ psql "postgresql://tsdbadmin:${PASSWORD}@${HOST}:${PORT}/${DATABASE}?sslmode=req
 # 3. Verify hypertable creation
 psql "postgresql://tsdbadmin:${PASSWORD}@${HOST}:${PORT}/${DATABASE}?sslmode=require" \
      -c "SELECT * FROM timescaledb_information.hypertables;"
-```
+```sql
 
 ### C. Environment Configuration
 ```python
@@ -1204,7 +1204,7 @@ TIMESCALEDB_SSL_MODE="require"
 DB_POOL_MIN_SIZE=10
 DB_POOL_MAX_SIZE=50
 DB_POOL_MAX_QUERIES=50000
-```
+```sql
 
 ### D. Basic Client Implementation
 ```python
@@ -1329,7 +1329,7 @@ async def main():
         "trajectory": {"steps": [...], "result": "success"},
         "modal_call_id": "modal-call-123"
     })
-```
+```sql
 
 ### E. Testing and Validation
 ```python
@@ -1369,7 +1369,7 @@ async def test_execution_recording():
 
 # Run tests
 # pytest tests/test_db_integration.py -v
-```
+```sql
 
 ### F. Documentation for Modal Team
 ```markdown
@@ -1380,7 +1380,7 @@ async def test_execution_recording():
 ### 1. Install the client
 ```bash
 pip install arc-eval-db
-```
+```sql
 
 ### 2. Initialize in your Modal app
 ```python
@@ -1389,7 +1389,7 @@ from arc_eval_db import ArcEvalDBClient
 # In your Modal function
 db_client = ArcEvalDBClient(os.environ["TIMESCALEDB_CONNECTION_STRING"])
 await db_client.initialize()
-```
+```sql
 
 ### 3. Record execution data
 ```python
@@ -1413,11 +1413,11 @@ for scenario_result in results:
         "trajectory": scenario_result.trajectory,
         "modal_call_id": modal.current_call_id()
     })
-```
+```sql
 
 ## API Reference
 [Include detailed API documentation]
-```
+```sql
 
 ---
 

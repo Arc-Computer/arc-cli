@@ -488,7 +488,7 @@ class ArcDBClient:
         async with self.engine.begin() as conn:
             await conn.execute(text("""
                 INSERT INTO simulations (
-                    simulation_id, config_version_id, scenario_set, 
+                    simulation_id, config_version_id, scenario_set,
                     simulation_name, total_scenarios, modal_app_id, status
                 ) VALUES (:simulation_id, :config_version_id, :scenario_set, 
                          :simulation_name, :total_scenarios, :modal_app_id, 'pending')
@@ -502,6 +502,48 @@ class ArcDBClient:
             })
         
         return simulation_id
+
+    @with_retry(max_attempts=3, delay=0.5)
+    async def finalize_simulation(
+        self,
+        simulation_id: str,
+        *,
+        status: str = "completed",
+        overall_score: float | None = None,
+        total_cost_usd: float | None = None,
+        execution_time_ms: int | None = None,
+        metadata: Dict[str, Any] | None = None,
+        completed_scenarios: int | None = None,
+        completed_at: datetime | None = None,
+    ) -> None:
+        """Update simulation record with final metadata."""
+        async with self.engine.begin() as conn:
+            await conn.execute(
+                text(
+                    """
+                UPDATE simulations
+                SET
+                    status = :status,
+                    overall_score = :overall_score,
+                    total_cost_usd = :total_cost_usd,
+                    execution_time_ms = :execution_time_ms,
+                    metadata = :metadata,
+                    completed_scenarios = :completed_scenarios,
+                    completed_at = :completed_at
+                WHERE simulation_id = :simulation_id
+                """
+                ),
+                {
+                    "simulation_id": simulation_id,
+                    "status": status,
+                    "overall_score": overall_score,
+                    "total_cost_usd": total_cost_usd,
+                    "execution_time_ms": execution_time_ms,
+                    "metadata": json.dumps(metadata or {}),
+                    "completed_scenarios": completed_scenarios,
+                    "completed_at": completed_at or datetime.utcnow(),
+                },
+            )
     
     # Outcome Recording (Optimized for TimescaleDB hypertable)
     async def record_outcome(self, outcome_data: Dict[str, Any]) -> str:

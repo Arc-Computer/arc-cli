@@ -1,5 +1,5 @@
 """
-Arc-Eval Production Simulator with Modal Parallel Execution
+Arc Production Simulator with Modal Parallel Execution
 Production version adapted from experiments/src/core/arc_eval_sandbox.py
 """
 
@@ -14,7 +14,7 @@ from contextlib import nullcontext
 from pydantic import BaseModel, Field
 
 # Create Modal application
-app = modal.App("arc-eval-production")
+app = modal.App("arc-production")
 
 # Get the project root directory
 project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
@@ -638,7 +638,7 @@ def test_cost_estimation(scenarios: int = 50):
 @app.local_entrypoint()
 def main():
     """Production simulator test entrypoint"""
-    print("[PRODUCTION] Arc-Eval Production Simulator")
+    print("[PRODUCTION] Arc Production Simulator")
     print("="*70)
     
     # Run basic tests

@@ -221,7 +221,7 @@ class TimescaleDBHealth:
 
 class ArcDBClient:
     """
-    High-level database client for Arc-Eval platform.
+    High-level database client for Arc platform.
     Optimized for TimescaleDB features and Modal sandbox integration.
     
     Features:

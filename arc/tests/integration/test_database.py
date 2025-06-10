@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Test Arc-Eval TimescaleDB Integration
+Test Arc TimescaleDB Integration
 =====================================
 
 Comprehensive test suite for TimescaleDB deployment including:
@@ -153,7 +153,7 @@ class TimescaleDBTester:
                 config_version_id=self.test_data["version_id"],
                 scenario_set=scenario_names,
                 simulation_name="comprehensive_test_run",
-                modal_app_id="arc-eval-test"
+                modal_app_id="arc-test"
             )
             
             self.test_data["simulation_id"] = simulation_id

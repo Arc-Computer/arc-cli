@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Deploy Arc-Eval TimescaleDB Schema
+Deploy Arc TimescaleDB Schema
 ==================================
 
 This script deploys the complete TimescaleDB schema to your cloud instance.
@@ -167,7 +167,7 @@ def get_connection_info() -> Dict[str, str]:
 
 async def main():
     """Main deployment function."""
-    print("🔧 Arc-Eval TimescaleDB Schema Deployment")
+    print("Arc TimescaleDB Schema Deployment")
     print("=" * 50)
     
     try:

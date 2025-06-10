@@ -72,7 +72,7 @@ class HybridState(CLIState):
 
         # Create configuration if not exists
         config_name = Path(result.config_path).stem
-        config_id = await db_client.create_configuration(
+        version_id = await db_client.create_configuration(
             name=config_name,
             user_id=self._user_id,
             initial_config={"path": result.config_path},  # Simplified for now
@@ -80,7 +80,7 @@ class HybridState(CLIState):
 
         # Create simulation record
         simulation_id = await db_client.create_simulation(
-            config_version_id=config_id,  # Using config_id directly for now
+            config_version_id=version_id,
             scenario_set=[
                 s.get("scenario_id", f"scenario_{i}")
                 for i, s in enumerate(result.scenarios)

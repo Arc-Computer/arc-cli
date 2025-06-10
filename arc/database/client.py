@@ -442,7 +442,16 @@ class ArcDBClient:
     # Configuration Management
     async def create_configuration(self, name: str, user_id: str, 
                                  initial_config: Dict[str, Any]) -> str:
-        """Create a new configuration with initial version."""
+        """Create a new configuration with initial version.
+        
+        Args:
+            name: Configuration name
+            user_id: User ID who created the configuration
+            initial_config: Initial configuration dictionary
+            
+        Returns:
+            str: The version_id of the created configuration version
+        """
         config_id = str(uuid.uuid4())
         version_id = str(uuid.uuid4())
         
@@ -544,7 +553,7 @@ class ArcDBClient:
                     "completed_at": completed_at or datetime.utcnow(),
                 },
             )
-    
+
     # Scenario Management
     async def ensure_scenario_exists(self, scenario_id: str, scenario_data: Optional[Dict[str, Any]] = None) -> None:
         """Ensure a scenario exists in the database, creating it if necessary."""
@@ -648,7 +657,7 @@ class ArcDBClient:
     async def record_outcomes_batch(self, outcomes: List[Dict[str, Any]]) -> List[str]:
         """Batch insert outcomes for high-throughput Modal executions."""
         outcome_ids = [str(uuid.uuid4()) for _ in outcomes]
-        
+
         # Validate all trajectories and ensure scenarios exist
         for outcome in outcomes:
             if "trajectory" in outcome:

@@ -74,7 +74,7 @@ class CLIState:
         """Clean up stale lock files older than max_age_seconds."""
         if not self.lock_file.exists():
             return
-        
+
         try:
             with open(self.lock_file, 'r') as f:
                 lines = f.read().strip().split('\n')
@@ -94,30 +94,31 @@ class CLIState:
                 self.lock_file.unlink()
             except OSError:
                 pass  # Already removed or permission issue
-    
+
     @contextmanager
     def _file_lock(self, timeout: float = 30.0):
         """Acquire file lock for concurrent access protection."""
         lock_acquired = False
         start_time = time.time()
-        
+
         # Create lock file if it doesn't exist
         self.lock_file.touch(exist_ok=True)
-        
+
         # Check for and clean up stale locks
         self._cleanup_stale_lock()
-        
-        with open(self.lock_file, 'w') as lock_fd:
-            # Write current process PID for stale lock detection
-            lock_fd.write(f"{os.getpid()}\n{int(time.time())}\n")
-            lock_fd.flush()
-            
+
+        with open(self.lock_file, 'a+') as lock_fd:
             while True:
                 try:
                     fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    # Write PID/timestamp after acquiring lock
+                    lock_fd.seek(0)
+                    lock_fd.truncate()
+                    lock_fd.write(f"{os.getpid()}\n{int(time.time())}\n")
+                    lock_fd.flush()
                     lock_acquired = True
                     break
-                except IOError:
+                except OSError:
                     elapsed = time.time() - start_time
                     if elapsed > timeout:
                         # Provide helpful error message with suggestions
@@ -128,7 +129,7 @@ class CLIState:
                             f"  • A previous process crashed and left a stale lock\n"
                             f"  • Try: rm {self.lock_file} to force cleanup\n"
                             f"  • Or wait for the current operation to complete"
-                        )
+                        ) from None
                     time.sleep(0.2)  # Less aggressive polling
             
             try:

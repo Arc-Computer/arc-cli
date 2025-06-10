@@ -148,7 +148,7 @@ async def _get_recent_runs(db_client, limit: int = 10) -> list:
     JOIN config_versions cv ON s.config_version_id = cv.version_id
     JOIN configurations c ON cv.config_id = c.config_id
     JOIN outcomes o ON s.simulation_id = o.simulation_id
-    GROUP BY s.simulation_id, s.simulation_name, c.name, 
+    GROUP BY s.simulation_id, s.simulation_name, c.name,
              s.created_at, s.overall_score, s.total_cost_usd
     ORDER BY s.created_at DESC
     LIMIT :limit
@@ -160,7 +160,7 @@ async def _get_recent_runs(db_client, limit: int = 10) -> list:
     runs = []
     for row in result:
         runs.append({
-            "run_id": row[1],  # simulation_name
+            "run_id": row[0],  # simulation_id
             "config": row[2],
             "timestamp": row[3].isoformat(),
             "reliability": float(row[4] or 0),

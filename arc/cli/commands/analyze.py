@@ -236,7 +236,7 @@ async def _get_cross_run_insights(db_client, config_path: str, days: int) -> dic
     
     # Use string formatting for interval since PostgreSQL doesn't allow parameters in INTERVAL
     query = text(f"""
-    SELECT 
+    SELECT
         s.simulation_name,
         s.created_at,
         s.overall_score,
@@ -252,7 +252,7 @@ async def _get_cross_run_insights(db_client, config_path: str, days: int) -> dic
     ORDER BY s.created_at DESC
     LIMIT 10
     """)
-    
+
     async with db_client.engine.begin() as conn:
         result = await conn.execute(query, {"config_name": config_name})
         

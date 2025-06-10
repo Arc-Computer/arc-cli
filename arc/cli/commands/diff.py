@@ -265,7 +265,7 @@ async def _diff_async(config1: str, config2: str, scenarios: int, historical: bo
                 for warning in statistical_warnings:
                     console.print(format_warning(warning))
                 console.print()
-            
+
             # Statistical significance (only if we have a valid test)
             if analysis.get("valid_statistical_test", False):
                 if analysis["significant"]:
@@ -274,14 +274,14 @@ async def _diff_async(config1: str, config2: str, scenarios: int, historical: bo
                     console.print(format_warning(f"Difference is NOT statistically significant (p = {analysis['p_value']:.4f})"))
             else:
                 console.print(format_warning("Statistical significance test could not be performed"))
-            
+
             console.print_metric("Test type", analysis.get("test_type", "unknown"))
-            console.print_metric("Effect size (Cohen's h)", f"{analysis['effect_size']:.2f} ({analysis['interpretation']})") 
+            console.print_metric("Effect size (Cohen's h)", f"{analysis['effect_size']:.2f} ({analysis['interpretation']})")
             console.print_metric("Confidence interval", f"[{analysis['ci_lower']:.1%}, {analysis['ci_upper']:.1%}]")
             if analysis.get("power") is not None:
                 console.print_metric("Statistical power", f"{analysis['power']:.2f}")
             console.print()
-            
+
             # Interpretation
             if analysis.get("significant") and rel_diff > 0:
                 relative_improvement = (rel_diff/reliability_a*100) if reliability_a > 0 else float('inf')
@@ -406,8 +406,7 @@ def _perform_statistical_analysis(results_a: list, results_b: list) -> Dict[str,
     p_b = sum(successes_b) / n_b if n_b > 0 else 0
     
     # Use chi-square test for proportions (more appropriate than t-test for binary data)
-    from scipy.stats import chi2_contingency, fisher_exact
-    import numpy as np
+    from scipy.stats import fisher_exact
     
     contingency_table = [
         [sum(successes_a), n_a - sum(successes_a)],
@@ -436,7 +435,7 @@ def _perform_statistical_analysis(results_a: list, results_b: list) -> Dict[str,
             p_value = p_value_chi2
             test_type = "chi_square"
             
-    except (ValueError, ZeroDivisionError) as e:
+    except (ValueError, ZeroDivisionError):
         # Handle edge cases where chi-square test cannot be performed
         p_value = None
         test_type = "insufficient_data"

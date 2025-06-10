@@ -152,11 +152,11 @@ class TestConfigNormalizer:
         """Test model name normalization."""
         config = {"model": "gpt-4-turbo"}
         result = self.normalizer.normalize(config)
-        assert result["model"] == "gpt-4.1"
+        assert result["model"] == "openai/gpt-4.1"
         
         config = {"model": "claude-3.5-sonnet"}
         result = self.normalizer.normalize(config)
-        assert result["model"] == "claude-sonnet-4"
+        assert result["model"] == "anthropic/claude-sonnet-4"
     
     def test_normalize_tool_definitions(self):
         """Test tool definition normalization."""
@@ -241,8 +241,8 @@ class TestConfigNormalizer:
     
     def test_identify_optimization_targets(self):
         """Test optimization target identification."""
-        # High temperature config
-        config = {"temperature": 1.5, "model": "gpt-4", "tools": list(range(15))}
+        # High temperature config with expensive model
+        config = {"temperature": 1.5, "model": "openai/gpt-4.1", "tools": list(range(15))}
         capabilities = {"domains": ["finance"]}
         
         profile = self.normalizer.create_arc_profile(config, capabilities)

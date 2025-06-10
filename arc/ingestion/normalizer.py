@@ -50,30 +50,53 @@ class ConfigNormalizer:
         model = config.get("model", "")
         
         # Model name mappings (lowercase -> standardized)
+        # Based on experiments/generation/generator.py MODELS_TO_TEST
         model_mappings = {
             # OpenAI
-            "gpt-4": "gpt-4.1",
-            "gpt4": "gpt-4.1",
-            "gpt-4-turbo": "gpt-4.1",
-            "gpt-4o": "gpt-4.1",
-            "gpt-4o-mini": "gpt-4.1-mini",
-            "gpt-3.5-turbo": "gpt-3.5-turbo",
+            "gpt-4": "openai/gpt-4.1",
+            "gpt4": "openai/gpt-4.1",
+            "gpt-4.1": "openai/gpt-4.1",
+            "gpt-4-turbo": "openai/gpt-4.1",
+            "gpt-4o": "openai/gpt-4.1",
+            "gpt-4o-mini": "openai/gpt-4.1-mini",
+            "gpt-4.1-mini": "openai/gpt-4.1-mini",
+            "gpt-3.5-turbo": "gpt-3.5-turbo",  # Keep as-is for backward compatibility
             
             # Anthropic
-            "claude-3-opus": "claude-opus-4",
-            "claude-3-sonnet": "claude-sonnet-4",
-            "claude-3-haiku": "claude-3.5-haiku",
-            "claude-3.5-sonnet": "claude-sonnet-4",
+            "claude-3-opus": "anthropic/claude-opus-4",
+            "claude-opus-4": "anthropic/claude-opus-4",
+            "claude-3-sonnet": "anthropic/claude-sonnet-4",
+            "claude-sonnet-4": "anthropic/claude-sonnet-4",
+            "claude-3.5-sonnet": "anthropic/claude-sonnet-4",
+            "claude-3-haiku": "anthropic/claude-3.5-haiku",
+            "claude-3.5-haiku": "anthropic/claude-3.5-haiku",
             
             # Google
-            "gemini-pro": "gemini-2.5-pro-preview",
-            "gemini-flash": "gemini-2.5-flash-preview-05-20",
-            "bard": "gemini-2.5-pro-preview",
+            "gemini-pro": "google/gemini-2.5-pro-preview",
+            "gemini-2.5-pro": "google/gemini-2.5-pro-preview",
+            "gemini-flash": "google/gemini-2.5-flash-preview-05-20",
+            "gemini-2.5-flash": "google/gemini-2.5-flash-preview-05-20",
+            "bard": "google/gemini-2.5-pro-preview",
             
-            # Meta
-            "llama-3": "llama-4-scout",
-            "llama3": "llama-4-scout",
-            "llama-3-70b": "llama-4-maverick",
+            # Meta (Llama 4)
+            "llama-3": "meta-llama/llama-4-scout",
+            "llama3": "meta-llama/llama-4-scout",
+            "llama-4-scout": "meta-llama/llama-4-scout",
+            "llama-3-70b": "meta-llama/llama-4-maverick",
+            "llama-4-maverick": "meta-llama/llama-4-maverick",
+            
+            # Mistral
+            "mistral-medium": "mistralai/mistral-medium-3",
+            "mistral-medium-3": "mistralai/mistral-medium-3",
+            
+            # Cohere
+            "command": "cohere/command-a",
+            "command-a": "cohere/command-a",
+            
+            # DeepSeek
+            "deepseek-chat": "deepseek/deepseek-chat-v3-0324",
+            "deepseek-chat-v3": "deepseek/deepseek-chat-v3-0324",
+            "deepseek-r1": "deepseek/deepseek-r1-0528",
         }
         
         normalized_model = model_mappings.get(model.lower(), model)
@@ -240,7 +263,8 @@ class ConfigNormalizer:
         
         # Model optimization
         model = config.get("model", "")
-        if "gpt-4" in model or "opus" in model:
+        # Check for expensive models (with or without provider prefix)
+        if "gpt-4.1" in model or "claude-opus-4" in model:
             targets.append("cost_optimization")
         
         # Tool optimization

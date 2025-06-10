@@ -1,7 +1,7 @@
 # Minimal Agent Configuration Example
 # This shows the bare minimum configuration Arc needs to profile an agent
 
-model: "gpt-4.1"
+model: "gpt-4"
 temperature: 0.7
 system_prompt: "You are a helpful assistant"
 tools: ["web_search", "calculator"]

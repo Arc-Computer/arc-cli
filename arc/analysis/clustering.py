@@ -6,6 +6,7 @@ Production version adapted from experiments/src/analysis/failure_clustering.py
 
 import json
 import time
+import logging
 from typing import Dict, List, Any, Tuple, Optional
 from collections import defaultdict
 from datetime import datetime

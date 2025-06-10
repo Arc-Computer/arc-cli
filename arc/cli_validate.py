@@ -1,41 +1,34 @@
 """CLI command for validating agent configurations."""
 
-import click
 from pathlib import Path
+
+import click
+import yaml
 from rich.console import Console
-from rich.table import Table
 from rich.panel import Panel
 from rich.syntax import Syntax
-import yaml
+from rich.table import Table
 
-from arc.ingestion.parser import AgentConfigParser
 from arc.ingestion.normalizer import ConfigNormalizer
+from arc.ingestion.parser import AgentConfigParser
 
 console = Console()
 
 
-@click.command()
-@click.argument('config_path', type=click.Path(exists=True))
-@click.option('--show-normalized', '-n', is_flag=True, help='Show normalized configuration')
-@click.option('--show-capabilities', '-c', is_flag=True, help='Show extracted capabilities')
-def validate(config_path: str, show_normalized: bool, show_capabilities: bool):
-    """Validate an agent configuration file.
+def _parse_and_validate_config(config_path: Path):
+    """Parse and validate the agent configuration.
     
-    This command checks that your agent configuration is valid and shows
-    how Arc will interpret it.
+    Returns:
+        tuple: (parsed_config, parser, normalizer, normalized_config, capabilities, profile)
+        Returns (None, None, None, None, None, None) on error
     """
-    config_path = Path(config_path)
-    
-    console.print(f"\n[bright_blue]Validating agent configuration:[/bright_blue] {config_path.name}\n")
-    
-    # Parse configuration
     parser = AgentConfigParser()
     try:
         parsed_config = parser.parse(config_path)
         console.print("[bright_green]✓[/bright_green] Configuration parsed successfully")
     except Exception as e:
         console.print(f"[bright_red]✗ Parsing failed:[/bright_red] {e}")
-        return
+        return None, None, None, None, None, None
     
     # Show warnings if any
     warnings = parser.get_warnings()
@@ -56,18 +49,21 @@ def validate(config_path: str, show_normalized: bool, show_capabilities: bool):
             console.print(f"  • {enhancement}")
     
     # Validate normalized config
-    if normalizer.validate_normalized_config(normalized_config):
-        console.print("\n[bright_green]✓[/bright_green] Configuration is valid and ready for Arc")
-    else:
+    if not normalizer.validate_normalized_config(normalized_config):
         console.print("\n[bright_red]✗[/bright_red] Normalized configuration validation failed")
-        return
+        return None, None, None, None, None, None
     
-    # Extract capabilities
+    console.print("\n[bright_green]✓[/bright_green] Configuration is valid and ready for Arc")
+    
+    # Extract capabilities and create profile
     capabilities = parser.extract_capabilities(parsed_config)
-    
-    # Create Arc profile
     profile = normalizer.create_arc_profile(normalized_config, capabilities)
     
+    return parsed_config, parser, normalizer, normalized_config, capabilities, profile
+
+
+def _display_summary_tables(normalized_config, capabilities, profile):
+    """Display configuration summary and test parameters tables."""
     # Display summary table
     console.print("\n[bright_blue]Configuration Summary:[/bright_blue]")
     
@@ -107,7 +103,10 @@ def validate(config_path: str, show_normalized: bool, show_capabilities: bool):
         console.print("\n[bright_blue]Optimization Opportunities:[/bright_blue]")
         for target in profile["optimization_targets"]:
             console.print(f"  • {target.replace('_', ' ').title()}")
-    
+
+
+def _display_optional_sections(show_normalized, show_capabilities, normalized_config, capabilities):
+    """Display optional sections based on flags."""
     # Show normalized config if requested
     if show_normalized:
         console.print("\n[bright_blue]Normalized Configuration:[/bright_blue]")
@@ -133,6 +132,34 @@ def validate(config_path: str, show_normalized: bool, show_capabilities: bool):
             console.print("\n  [bright_cyan]Behavioral Traits:[/bright_cyan]")
             for trait in capabilities["behavioral_traits"]:
                 console.print(f"    • {trait.replace('_', ' ').title()}")
+
+
+@click.command()
+@click.argument('config_path', type=click.Path(exists=True))
+@click.option('--show-normalized', '-n', is_flag=True, help='Show normalized configuration')
+@click.option('--show-capabilities', '-c', is_flag=True, help='Show extracted capabilities')
+def validate(config_path: str, show_normalized: bool, show_capabilities: bool):
+    """Validate an agent configuration file.
+    
+    This command checks that your agent configuration is valid and shows
+    how Arc will interpret it.
+    """
+    config_path = Path(config_path)
+    
+    console.print(f"\n[bright_blue]Validating agent configuration:[/bright_blue] {config_path.name}\n")
+    
+    # Parse and validate configuration
+    result = _parse_and_validate_config(config_path)
+    parsed_config, parser, normalizer, normalized_config, capabilities, profile = result
+    
+    if parsed_config is None:
+        return
+    
+    # Display summary tables
+    _display_summary_tables(normalized_config, capabilities, profile)
+    
+    # Display optional sections
+    _display_optional_sections(show_normalized, show_capabilities, normalized_config, capabilities)
     
     console.print("\n[bright_green]✓[/bright_green] Validation complete\n")
 

@@ -15,9 +15,9 @@ from dataclasses import dataclass, field
 import hashlib
 
 # Import production components
-from arc.core.models.scenario import Scenario
-from arc.core.utils.constants import DEFAULT_QUALITY_THRESHOLD
-from arc.scenarios.quality_scorer import ScenarioQualityScorer, ScenarioDeduplicator
+from ..core.models.scenario import Scenario
+from ..core.utils.constants import DEFAULT_QUALITY_THRESHOLD
+from .generation_coordinator import GenerationCoordinator, GenerationMetrics as CoordinatorMetrics
 
 
 @dataclass
@@ -63,10 +63,12 @@ class ScenarioGenerator:
         with open(agent_config_path, 'r') as f:
             self.agent_config = yaml.safe_load(f)
         
-        # Initialize components
-        if self.use_patterns:
-            self.quality_scorer = ScenarioQualityScorer(min_threshold=quality_threshold)
-            self.deduplicator = ScenarioDeduplicator()
+        # Initialize generation coordinator
+        self.coordinator = GenerationCoordinator(
+            api_key=self.api_key,
+            use_llm=bool(self.api_key),
+            quality_threshold=quality_threshold
+        )
         
         # Generation metrics
         self.metrics = GenerationMetrics()
@@ -76,93 +78,60 @@ class ScenarioGenerator:
         self,
         count: int = 100,
         batch_size: int = 20,
-        pattern_ratio: float = 0.7
+        pattern_ratio: float = 0.7,
+        currency_focus: bool = False
     ) -> List[Scenario]:
         """
         Generate scenarios using hybrid approach
         
         Args:
             count: Total number of scenarios to generate
-            batch_size: Scenarios per batch
+            batch_size: Scenarios per batch (not used with coordinator)
             pattern_ratio: Ratio of pattern-based vs pure LLM scenarios
+            currency_focus: Whether to focus on currency-related scenarios
         
         Returns:
             List of Scenario objects
         """
-        start_time = datetime.now()
-        all_scenarios = []
-        
-        if self.use_patterns and pattern_ratio > 0:
-            # Generate pattern-based scenarios
-            pattern_count = int(count * pattern_ratio)
-            print(f"\nGenerating {pattern_count} pattern-based scenarios...")
-            
-            pattern_scenarios = await self._generate_pattern_based_scenarios(pattern_count)
-            all_scenarios.extend(pattern_scenarios)
-            
-            # Generate remaining with LLM
-            llm_count = count - len(pattern_scenarios)
-            if llm_count > 0:
-                print(f"\nGenerating {llm_count} additional LLM scenarios...")
-                llm_scenarios = await self._generate_llm_scenarios(llm_count, batch_size)
-                all_scenarios.extend(llm_scenarios)
+        # Determine generation approach
+        if currency_focus and count <= 15:
+            # Generate currency-focused scenarios
+            scenarios, coord_metrics = await self.coordinator.generate_currency_scenarios(
+                self.agent_config,
+                count=count
+            )
+        elif count >= 35 and not currency_focus:
+            # Generate TRAIL-inspired scenarios
+            scenarios, coord_metrics = await self.coordinator.generate_trail_scenarios(
+                self.agent_config,
+                count=count
+            )
         else:
-            # Use LLM generation only
-            all_scenarios = await self._generate_llm_scenarios(count, batch_size)
+            # General scenario generation
+            scenarios, coord_metrics = await self.coordinator.generate_scenarios(
+                self.agent_config,
+                total_scenarios=count,
+                focus_on_assumptions=True,
+                currency_focus=currency_focus
+            )
         
-        # Apply quality filtering
-        if self.use_patterns:
-            all_scenarios = self._apply_quality_filtering(all_scenarios)
+        # Update our metrics from coordinator metrics
+        self.metrics.total_generated = coord_metrics.total_scenarios_generated
+        self.metrics.time_taken = coord_metrics.generation_time_seconds
+        self.metrics.patterns_used = list(set(coord_metrics.patterns_selected))
+        self.metrics.duplicates_removed = coord_metrics.duplicates_removed
+        self.metrics.scenarios_rejected = coord_metrics.scenarios_failed_quality
+        self.metrics.generation_cost = coord_metrics.estimated_cost
         
-        # Update metrics
-        self.metrics.total_generated = len(all_scenarios)
-        self.metrics.time_taken = (datetime.now() - start_time).total_seconds()
-        self.generated_scenarios = all_scenarios
+        # Extract quality scores
+        for scenario in scenarios:
+            if 'quality_metrics' in scenario.metadata:
+                score = scenario.metadata['quality_metrics'].get('total', 0)
+                self.metrics.quality_scores.append(score)
         
-        return all_scenarios
+        self.generated_scenarios = scenarios
+        return scenarios
     
-    async def _generate_pattern_based_scenarios(self, count: int) -> List[Scenario]:
-        """Generate scenarios using failure patterns"""
-        # TODO: Implement pattern-based generation using failure patterns
-        # For now, return empty list to allow migration to complete
-        return []
-    
-    async def _generate_llm_scenarios(self, count: int, batch_size: int) -> List[Scenario]:
-        """Generate scenarios using LLM"""
-        # TODO: Implement LLM-based generation
-        # For now, return empty list to allow migration to complete
-        return []
-    
-    def _apply_quality_filtering(self, scenarios: List[Scenario]) -> List[Scenario]:
-        """Apply quality scoring and deduplication"""
-        print(f"\nApplying quality filtering to {len(scenarios)} scenarios...")
-        
-        # Convert to dict format for scoring
-        scenario_dicts = [s.to_dict() for s in scenarios]
-        
-        # Score scenarios
-        passed_dicts, failed_dicts = self.quality_scorer.score_batch(scenario_dicts)
-        self.metrics.scenarios_rejected = len(failed_dicts)
-        
-        print(f"  ✓ {len(passed_dicts)} passed quality threshold")
-        print(f"  ✗ {len(failed_dicts)} rejected")
-        
-        # Deduplicate
-        unique_dicts = self.deduplicator.deduplicate_batch(passed_dicts)
-        self.metrics.duplicates_removed = len(passed_dicts) - len(unique_dicts)
-        
-        print(f"  • {self.metrics.duplicates_removed} duplicates removed")
-        
-        # Convert back to Scenario objects
-        filtered_scenarios = []
-        for scenario_dict in unique_dicts:
-            scenario = Scenario(**scenario_dict)
-            if 'quality_metrics' in scenario_dict:
-                scenario.quality_score = scenario_dict['quality_metrics']['total_score']
-                self.metrics.quality_scores.append(scenario.quality_score)
-            filtered_scenarios.append(scenario)
-        
-        return filtered_scenarios
     
     def prepare_for_sandbox(self, scenarios: List[Scenario]) -> Dict[str, Any]:
         """Prepare scenarios for sandbox execution"""

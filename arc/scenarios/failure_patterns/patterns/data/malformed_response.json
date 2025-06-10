@@ -1,0 +1,20 @@
+{
+  "id": "malformed_response",
+  "title": "Invalid JSON Response Structure",
+  "category": "data",
+  "severity": "high",
+  "trigger_conditions": [
+    "invalid JSON syntax",
+    "missing required fields",
+    "unexpected data types"
+  ],
+  "expected_error": "JSON parsing error: Unexpected token",
+  "recovery_patterns": [
+    "response validation",
+    "schema enforcement",
+    "error reporting"
+  ],
+  "frequency": "common",
+  "description": "API returns malformed or incomplete JSON, testing parsing robustness",
+  "example_instantiation": "Search products returns HTML error page instead of JSON array"
+}

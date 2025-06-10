@@ -1,6 +1,7 @@
 """Arc run command - test agent with generated scenarios."""
 
 import asyncio
+import os
 import time
 from datetime import datetime
 from pathlib import Path
@@ -16,7 +17,7 @@ from rich.table import Table
 from arc.cli.utils import ArcConsole, CLIState, RunResult, format_error, format_success, format_warning
 from arc.ingestion.parser import AgentConfigParser
 from arc.ingestion.normalizer import ConfigNormalizer
-from arc.scenarios.generator import ScenarioGenerator, generate_high_quality_scenarios
+from arc.scenarios.generator import ScenarioGenerator
 from arc.core.models.scenario import Scenario
 
 
@@ -104,15 +105,27 @@ def run(config_path: str, scenarios: int, json_output: bool, no_confirm: bool, p
             _print_scenario_summary(generated_scenarios)
             console.print()
         
-        # Step 4: Execute scenarios (placeholder for now)
+        # Step 4: Execute scenarios
         if not json_output:
             console.print_header("Executing scenarios")
-            console.print("[warning]Note: Modal execution not yet implemented[/warning]")
-            console.print("Simulating execution for demo purposes...")
-            console.print()
         
-        # Simulate execution with mock results
-        results, execution_time = _simulate_execution(generated_scenarios, json_output)
+        # Check if Modal execution is available
+        use_modal = state.config.get("use_modal", False) and _check_modal_available()
+        
+        if use_modal:
+            # Execute with Modal sandbox
+            results, execution_time, actual_cost = _execute_with_modal(
+                scenarios=generated_scenarios,
+                agent_config=normalized_config,
+                json_output=json_output
+            )
+        else:
+            # Fall back to simulation
+            if not json_output:
+                console.print("[warning]Modal not configured - simulating execution[/warning]")
+                console.print()
+            results, execution_time = _simulate_execution(generated_scenarios, json_output)
+            actual_cost = estimated_cost
         
         # Step 5: Calculate results
         success_count = sum(1 for r in results if r["success"])
@@ -135,7 +148,7 @@ def run(config_path: str, scenarios: int, json_output: bool, no_confirm: bool, p
             failure_count=failure_count,
             reliability_score=reliability_score,
             execution_time=execution_time,
-            total_cost=estimated_cost,  # Will be actual cost when Modal is integrated
+            total_cost=actual_cost,  # Use actual cost from execution
             scenarios=[s.to_dict() if hasattr(s, 'to_dict') else s for s in generated_scenarios],
             results=results,
             failures=[r for r in results if not r["success"]]
@@ -164,7 +177,7 @@ def run(config_path: str, scenarios: int, json_output: bool, no_confirm: bool, p
             if currency_failures:
                 table.add_row("Currency Assumption Violations", f"{len(currency_failures)} failures", style="error")
             table.add_row("Time to insight", f"{execution_time:.1f} seconds")
-            table.add_row("Actual cost", f"${estimated_cost:.4f}")
+            table.add_row("Actual cost", f"${actual_cost:.4f}")
             
             console.print(table)
             console.print()
@@ -198,21 +211,43 @@ async def _generate_scenarios_async(
         if is_finance and not json_output:
             console.print("Detected finance domain - including currency assumption scenarios", style="info")
         
-        # Generate scenarios
-        scenarios = await generate_high_quality_scenarios(
+        # Initialize generator
+        generator = ScenarioGenerator(
             agent_config_path=config_path,
-            count=count,
             use_patterns=True,
-            pattern_ratio=pattern_ratio,
-            quality_threshold=0.7
+            quality_threshold=2.0  # Lower threshold for more scenarios
         )
+        
+        # Generate scenarios with currency focus for first 15
+        if count >= 50:
+            # Generate 15 currency scenarios + 35 general scenarios
+            currency_scenarios = await generator.generate_scenarios_batch(
+                count=15,
+                pattern_ratio=pattern_ratio,
+                currency_focus=True
+            )
+            
+            general_scenarios = await generator.generate_scenarios_batch(
+                count=count - 15,
+                pattern_ratio=pattern_ratio,
+                currency_focus=False
+            )
+            
+            scenarios = currency_scenarios + general_scenarios
+        else:
+            # Generate all as general scenarios
+            scenarios = await generator.generate_scenarios_batch(
+                count=count,
+                pattern_ratio=pattern_ratio,
+                currency_focus=False
+            )
         
         return scenarios
     
     except Exception as e:
         # For now, return mock scenarios if generation fails
         if not json_output:
-            console.print(format_warning("Using mock scenarios for demo"))
+            console.print(format_warning("Failed to generate scenarios, using mock data"))
         
         mock_scenarios = []
         for i in range(count):
@@ -305,3 +340,110 @@ def _simulate_execution(scenarios: List[Any], json_output: bool) -> tuple[List[D
     
     execution_time = time.time() - start_time
     return results, execution_time
+
+
+def _check_modal_available() -> bool:
+    """Check if Modal is installed and configured."""
+    try:
+        import modal
+        # Check for Modal token
+        return bool(os.environ.get("MODAL_TOKEN_ID"))
+    except ImportError:
+        return False
+
+
+def _execute_with_modal(
+    scenarios: List[Scenario],
+    agent_config: Dict[str, Any],
+    json_output: bool
+) -> tuple[List[Dict[str, Any]], float, float]:
+    """Execute scenarios using Modal sandbox.
+    
+    Returns:
+        Tuple of (results, execution_time, total_cost)
+    """
+    try:
+        import modal
+        # Import the app and function from simulator
+        from arc.sandbox.engine.simulator import app as modal_app, evaluate_single_scenario
+    except ImportError as e:
+        raise RuntimeError(f"Modal execution failed: {e}")
+    
+    start_time = time.time()
+    results = []
+    total_cost = 0.0
+    
+    # Prepare scenarios for sandbox
+    # Convert Scenario objects to dicts if needed
+    scenario_dicts = []
+    for scenario in scenarios:
+        if hasattr(scenario, 'to_dict'):
+            scenario_dicts.append(scenario.to_dict())
+        else:
+            scenario_dicts.append(scenario)
+    
+    # Create sandbox data format
+    sandbox_data = {
+        "scenarios": scenario_dicts,
+        "metadata": {
+            "total_scenarios": len(scenarios),
+            "generation_timestamp": datetime.now().isoformat(),
+            "agent_model": agent_config.get("model", "unknown")
+        }
+    }
+    
+    # Create tuples of (scenario, agent_config, index) for Modal
+    scenario_tuples = [
+        (scenario, agent_config, i) 
+        for i, scenario in enumerate(sandbox_data["scenarios"])
+    ]
+    
+    if not json_output:
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            BarColumn(),
+            TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
+            TimeRemainingColumn(),
+            console=console,
+        ) as progress:
+            task = progress.add_task("Executing scenarios on Modal...", total=len(scenarios))
+            
+            # Execute in batches for progress updates
+            batch_size = 10
+            for i in range(0, len(scenario_tuples), batch_size):
+                batch = scenario_tuples[i:i+batch_size]
+                
+                # Execute batch on Modal
+                with modal_app.run():
+                    batch_results = list(evaluate_single_scenario.map(batch))
+                
+                for result in batch_results:
+                    results.append({
+                        "scenario_id": result.get("scenario_id"),
+                        "success": result.get("success", False),
+                        "execution_time": result.get("execution_time_ms", 0) / 1000,
+                        "failure_reason": result.get("failure_reason"),
+                        "tool_calls": result.get("tool_calls", []),
+                        "cost": result.get("cost", 0)
+                    })
+                    total_cost += result.get("cost", 0)
+                    progress.update(task, advance=len(batch))
+    else:
+        # Silent execution for JSON output
+        with modal_app.run():
+            modal_results = list(evaluate_single_scenario.map(scenario_tuples))
+        
+        for result in modal_results:
+            results.append({
+                "scenario_id": result.get("scenario_id"),
+                "success": result.get("success", False),
+                "execution_time": result.get("execution_time_ms", 0) / 1000,
+                "failure_reason": result.get("failure_reason"),
+                "tool_calls": result.get("tool_calls", []),
+                "cost": result.get("cost", 0)
+            })
+            total_cost += result.get("cost", 0)
+    
+    execution_time = time.time() - start_time
+    return results, execution_time, total_cost

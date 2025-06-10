@@ -1,0 +1,20 @@
+{
+  "id": "precision_loss",
+  "title": "Floating Point Precision Loss",
+  "category": "calculation",
+  "severity": "medium",
+  "trigger_conditions": [
+    "financial calculations",
+    "scientific computations",
+    "cumulative operations"
+  ],
+  "expected_error": "Result differs from expected value by 0.000001",
+  "recovery_patterns": [
+    "decimal arithmetic",
+    "precision tracking",
+    "rounding strategies"
+  ],
+  "frequency": "common",
+  "description": "Mathematical operations lose precision due to floating point representation",
+  "example_instantiation": "Currency conversion chain USD->EUR->JPY->USD loses cents due to rounding"
+}

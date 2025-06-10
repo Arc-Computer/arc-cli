@@ -34,13 +34,13 @@ load_dotenv()
 project_root = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(project_root))
 
-from arc.database.client import ArcEvalDBClient
+from arc.database.client import ArcDBClient
 
 
 class TimescaleDBTester:
     """Comprehensive tester for TimescaleDB functionality."""
     
-    def __init__(self, client: ArcEvalDBClient):
+    def __init__(self, client: ArcDBClient):
         self.client = client
         self.test_data = {}
         
@@ -504,8 +504,8 @@ class TimescaleDBTester:
 async def main():
     """Main test runner."""
     try:
-        # Initialize client
-        client = ArcEvalDBClient()
+            # Initialize client
+    client = ArcDBClient()
         tester = TimescaleDBTester(client)
         
         # Run all tests

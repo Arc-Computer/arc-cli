@@ -1,6 +1,6 @@
 """
-Unit tests for ArcEvalDBClient
-==============================
+Unit tests for ArcDBClient
+==========================
 
 Comprehensive unit tests for the database client with mocking
 to ensure >90% code coverage without requiring actual database.
@@ -18,7 +18,7 @@ import asyncpg
 
 # Import the client and related classes
 from arc.database.client import (
-    ArcEvalDBClient, 
+    ArcDBClient, 
     TimescaleDBHealth,
     get_engine,
     DatabaseError,
@@ -201,8 +201,8 @@ class TestTimescaleDBHealth:
         }
 
 
-class TestArcEvalDBClient:
-    """Test the main ArcEvalDBClient class."""
+class TestArcDBClient:
+    """Test the main ArcDBClient class."""
     
     @pytest.fixture
     def mock_engine(self):
@@ -230,27 +230,27 @@ class TestArcEvalDBClient:
     
     @pytest.fixture
     def client(self, mock_engine):
-        """Create an ArcEvalDBClient instance."""
+        """Create an ArcDBClient instance."""
         with patch.dict('os.environ', {'TIMESCALE_SERVICE_URL': 'postgresql://test:test@localhost/test'}):
-            return ArcEvalDBClient(enable_monitoring=True)
+            return ArcDBClient(enable_monitoring=True)
     
     def test_client_initialization_with_connection_string(self, mock_engine):
         """Test client initialization with explicit connection string."""
-        client = ArcEvalDBClient(connection_string="postgresql://test:test@localhost/test")
+        client = ArcDBClient(connection_string="postgresql://test:test@localhost/test")
         assert client.connection_string == "postgresql://test:test@localhost/test"
         assert client.enable_monitoring is True
     
     def test_client_initialization_with_env_var(self, mock_engine):
         """Test client initialization with environment variable."""
         with patch.dict('os.environ', {'TIMESCALE_SERVICE_URL': 'postgresql://env:env@localhost/env'}):
-            client = ArcEvalDBClient()
+            client = ArcDBClient()
             assert client.connection_string == "postgresql://env:env@localhost/env"
     
     def test_client_initialization_no_connection_string(self, mock_engine):
         """Test client initialization fails without connection string."""
         with patch.dict('os.environ', {}, clear=True):
             with pytest.raises(ValueError) as exc_info:
-                ArcEvalDBClient()
+                ArcDBClient()
             assert "No connection string provided" in str(exc_info.value)
     
     def test_update_metrics(self, client):
@@ -268,16 +268,21 @@ class TestArcEvalDBClient:
         assert client._metrics["retry_count"] == 2
         assert abs(client._metrics["avg_query_time"] - 0.15) < 0.0001  # Fix floating point comparison
     
-    def test_get_metrics(self, client):
+    @pytest.mark.asyncio
+    async def test_get_metrics(self, client):
         """Test getting metrics."""
         client._update_metrics(0.1, True, 0)
         client._update_metrics(0.2, False, 1)
         
-        metrics = client.get_metrics()
-        assert metrics["total_queries"] == 2
-        assert metrics["failed_queries"] == 1
-        assert metrics["success_rate"] == 50.0
-        assert "pool_stats" in metrics
+        # Mock the pool stats since get_metrics is now async
+        with patch.object(client.health, 'check_connection_pool') as mock_pool:
+            mock_pool.return_value = {"size": 20, "checked_out": 0}
+            
+            metrics = await client.get_metrics()
+            assert metrics["total_queries"] == 2
+            assert metrics["failed_queries"] == 1
+            assert metrics["success_rate"] == 50.0
+            assert "pool_stats" in metrics
     
     @pytest.mark.asyncio
     async def test_initialize_success(self, client, mock_engine):

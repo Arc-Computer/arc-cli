@@ -25,7 +25,7 @@ import asyncpg
 # Configure logging
 logger = logging.getLogger(__name__)
 
-__all__: list[str] = ["get_engine", "get_session", "ArcEvalDBClient", "TimescaleDBHealth"]
+__all__: list[str] = ["get_engine", "get_session", "ArcDBClient", "TimescaleDBHealth"]
 
 _engine: AsyncEngine | None = None
 
@@ -221,7 +221,7 @@ class TimescaleDBHealth:
             return {"error": str(e)}
 
 
-class ArcEvalDBClient:
+class ArcDBClient:
     """
     High-level database client for Arc-Eval platform.
     Optimized for TimescaleDB features and Modal sandbox integration.
@@ -269,7 +269,7 @@ class ArcEvalDBClient:
             "last_health_check": None
         }
         
-        logger.info(f"ArcEvalDBClient initialized with monitoring={'enabled' if enable_monitoring else 'disabled'}")
+        logger.info(f"ArcDBClient initialized with monitoring={'enabled' if enable_monitoring else 'disabled'}")
     
     def _update_metrics(self, query_time: float, success: bool, retries: int = 0):
         """Update internal performance metrics."""
@@ -288,8 +288,9 @@ class ArcEvalDBClient:
             (current_avg * (total_queries - 1) + query_time) / total_queries
         )
     
-    def get_metrics(self) -> Dict[str, Any]:
+    async def get_metrics(self) -> Dict[str, Any]:
         """Get current performance metrics."""
+        pool_stats = await self.health.check_connection_pool()
         return {
             **self._metrics,
             "success_rate": (
@@ -297,7 +298,7 @@ class ArcEvalDBClient:
                 / self._metrics["total_queries"] * 100
                 if self._metrics["total_queries"] > 0 else 0
             ),
-            "pool_stats": asyncio.run(self.health.check_connection_pool())
+            "pool_stats": pool_stats
         }
     
     @with_retry(max_attempts=3, delay=1.0)

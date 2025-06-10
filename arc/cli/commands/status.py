@@ -2,15 +2,13 @@
 
 import asyncio
 from datetime import datetime, timedelta
-from pathlib import Path
-
 import click
 from rich.table import Table
 from rich.panel import Panel
 from rich.columns import Columns
 from sqlalchemy import text
 
-from arc.cli.utils import ArcConsole, CLIState, format_error, format_success
+from arc.cli.utils import ArcConsole, CLIState, format_error
 from arc.cli.utils import db_manager
 
 console = ArcConsole()

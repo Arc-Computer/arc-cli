@@ -16,6 +16,7 @@ from rich.table import Table
 
 from arc.cli.utils import ArcConsole, CLIState, RunResult, format_error, format_success, format_warning
 from arc.cli.utils import db_manager, HybridState
+from arc.cli.utils.error_helpers import categorize_error
 from arc.ingestion.parser import AgentConfigParser
 from arc.ingestion.normalizer import ConfigNormalizer
 from arc.scenarios.generator import ScenarioGenerator
@@ -415,31 +416,6 @@ def _check_modal_available() -> bool:
         return False
 
 
-def _categorize_error(failure_reason: Optional[str]) -> Optional[str]:
-    """Categorize error based on failure reason.
-    
-    Args:
-        failure_reason: The failure reason text
-        
-    Returns:
-        Error category or None
-    """
-    if not failure_reason:
-        return None
-        
-    failure_lower = failure_reason.lower()
-    if "currency" in failure_lower:
-        return "currency_assumption"
-    elif "timeout" in failure_lower:
-        return "timeout"
-    elif "tool" in failure_lower:
-        return "tool_error"
-    elif "api" in failure_lower:
-        return "api_error"
-    else:
-        return "other"
-
-
 def _execute_with_modal(
     scenarios: List[Scenario],
     agent_config: Dict[str, Any],
@@ -549,7 +525,7 @@ def _execute_with_modal(
                         "trajectory": detailed_trajectory,
                         "reliability_score": reliability_score.get("overall_score", 0),
                         "modal_call_id": modal_call_id,
-                        "error_category": _categorize_error(trajectory.get("final_response")) if trajectory.get("status") == "error" else None
+                        "error_category": categorize_error(trajectory.get("final_response")) if trajectory.get("status") == "error" else None
                     })
                     total_cost += cost
                     progress.update(task, advance=1)
@@ -600,7 +576,7 @@ def _execute_with_modal(
                 "trajectory": detailed_trajectory,
                 "reliability_score": reliability_score.get("overall_score", 0),
                 "modal_call_id": modal_call_id,
-                "error_category": _categorize_error(trajectory.get("final_response")) if trajectory.get("status") == "error" else None
+                "error_category": categorize_error(trajectory.get("final_response")) if trajectory.get("status") == "error" else None
             })
             total_cost += cost
     

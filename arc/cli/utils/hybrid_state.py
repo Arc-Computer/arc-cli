@@ -9,6 +9,7 @@ from uuid import uuid4
 from arc.cli.utils.state import CLIState, RunResult
 from arc.cli.utils.console import ArcConsole
 from arc.cli.utils.db_connection import db_manager
+from arc.cli.utils.error_helpers import categorize_error
 
 console = ArcConsole()
 
@@ -111,37 +112,13 @@ class HybridState(CLIState):
                         "trajectory": r.get("trajectory", {}),
                         "modal_call_id": r.get("modal_call_id"),
                         "error_code": r.get("error_code"),
-                        "error_category": self._categorize_error(r.get("failure_reason"))
+                        "error_category": categorize_error(r.get("failure_reason"))
                     }
                     outcomes.append(outcome)
                 
                 await db_client.record_outcomes_batch(outcomes)
             
             console.print(f"Run {result.run_id} saved to database", style="success")
-    
-    def _categorize_error(self, failure_reason: Optional[str]) -> Optional[str]:
-        """Categorize error based on failure reason.
-        
-        Args:
-            failure_reason: The failure reason text
-            
-        Returns:
-            Error category or None
-        """
-        if not failure_reason:
-            return None
-            
-        failure_lower = failure_reason.lower()
-        if "currency" in failure_lower:
-            return "currency_assumption"
-        elif "timeout" in failure_lower:
-            return "timeout"
-        elif "tool" in failure_lower:
-            return "tool_error"
-        elif "api" in failure_lower:
-            return "api_error"
-        else:
-            return "other"
     
     def save_run(self, result: RunResult) -> Path:
         """Synchronous wrapper for save_run_async.
@@ -159,10 +136,7 @@ class HybridState(CLIState):
         if self.db_connected:
             try:
                 # Run async operation in sync context
-                loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(loop)
-                loop.run_until_complete(self._save_to_database(result))
-                loop.close()
+                asyncio.run(self._save_to_database(result))
             except Exception as e:
                 console.print(
                     f"Warning: Database save failed: {str(e)}. Data saved to files only.",

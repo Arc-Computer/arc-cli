@@ -407,6 +407,7 @@ def _perform_statistical_analysis(results_a: list, results_b: list) -> Dict[str,
     
     # Use chi-square test for proportions (more appropriate than t-test for binary data)
     from scipy.stats import chi2_contingency, fisher_exact
+    import numpy as np
     
     contingency_table = [
         [sum(successes_a), n_a - sum(successes_a)],
@@ -443,7 +444,6 @@ def _perform_statistical_analysis(results_a: list, results_b: list) -> Dict[str,
     
     # Calculate effect size (Cohen's h for proportions)
     # h = 2 * (arcsin(sqrt(p1)) - arcsin(sqrt(p2)))
-    import numpy as np
     h = 2 * (np.arcsin(np.sqrt(p_b)) - np.arcsin(np.sqrt(p_a)))
     
     # Calculate confidence interval for difference in proportions

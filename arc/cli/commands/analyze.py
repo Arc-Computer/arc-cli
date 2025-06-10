@@ -234,7 +234,8 @@ async def _get_cross_run_insights(db_client, config_path: str, days: int) -> dic
     """Get insights across multiple runs for the same config."""
     config_name = config_path.split("/")[-1]
     
-    query = text("""
+    # Use string formatting for interval since PostgreSQL doesn't allow parameters in INTERVAL
+    query = text(f"""
     SELECT 
         s.simulation_name,
         s.created_at,
@@ -246,14 +247,14 @@ async def _get_cross_run_insights(db_client, config_path: str, days: int) -> dic
     JOIN configurations c ON cv.config_id = c.config_id
     JOIN outcomes o ON s.simulation_id = o.simulation_id
     WHERE c.name = :config_name
-        AND s.created_at >= NOW() - INTERVAL :days || ' days'
+        AND s.created_at >= NOW() - INTERVAL '{days} days'
     GROUP BY s.simulation_id, s.simulation_name, s.created_at, s.overall_score
     ORDER BY s.created_at DESC
     LIMIT 10
     """)
     
     async with db_client.engine.begin() as conn:
-        result = await conn.execute(query, {"config_name": config_name, "days": str(days)})
+        result = await conn.execute(query, {"config_name": config_name})
         
     runs = []
     for row in result:

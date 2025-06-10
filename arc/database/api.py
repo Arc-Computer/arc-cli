@@ -94,6 +94,13 @@ class ArcAPI:
             # Extract scenario IDs from scenario objects
             scenario_ids = [s.get("id", f"scenario_{i}") for i, s in enumerate(scenarios)]
             
+            # Ensure scenarios exist before creating simulation
+            for scenario in scenarios:
+                await self.db.ensure_scenario_exists(
+                    scenario.get("id", f"scenario_{scenarios.index(scenario)}"),
+                    scenario
+                )
+            
             # Create simulation record
             simulation_id = await self.db.create_simulation(
                 config_version_id=config_version_id,
@@ -190,6 +197,8 @@ class ArcAPI:
                 "tokens_used": trajectory.get("token_usage", {}).get("total_tokens", 0),
                 "cost_usd": trajectory.get("token_usage", {}).get("total_cost", 0.0),
                 "trajectory": {
+                    "start_time": trajectory.get("start_time", datetime.now(timezone.utc).isoformat()),
+                    "status": trajectory.get("status", "error"),
                     "task_prompt": trajectory.get("task_prompt"),
                     "final_response": trajectory.get("final_response"),
                     "full_trajectory": trajectory.get("full_trajectory", []),
@@ -219,6 +228,7 @@ class ArcAPI:
                     SET 
                         status = :status,
                         modal_call_id = :modal_call_id,
+                        started_at = COALESCE(started_at, NOW()),
                         completed_at = NOW()
                     WHERE simulation_id = :simulation_id AND scenario_id = :scenario_id
                 """), {
@@ -285,6 +295,8 @@ class ArcAPI:
                     "tokens_used": trajectory.get("token_usage", {}).get("total_tokens", 0),
                     "cost_usd": trajectory.get("token_usage", {}).get("total_cost", 0.0),
                     "trajectory": {
+                        "start_time": trajectory.get("start_time", datetime.now(timezone.utc).isoformat()),
+                        "status": trajectory.get("status", "error"),
                         "task_prompt": trajectory.get("task_prompt"),
                         "final_response": trajectory.get("final_response"),
                         "full_trajectory": trajectory.get("full_trajectory", []),
@@ -317,6 +329,7 @@ class ArcAPI:
                         SET 
                             status = :status,
                             modal_call_id = :modal_call_id,
+                            started_at = COALESCE(started_at, NOW()),
                             completed_at = NOW()
                         WHERE simulation_id = :simulation_id AND scenario_id = :scenario_id
                     """), {

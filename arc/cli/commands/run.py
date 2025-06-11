@@ -632,8 +632,15 @@ async def _execute_modal_with_streaming(
         else:
             scenario_dicts.append(scenario)
     
+    # Merge configuration with capabilities to ensure tools have full definitions
+    enhanced_config = agent_profile["configuration"].copy()
+    enhanced_config["tools"] = agent_profile["capabilities"].get("tools", enhanced_config.get("tools", []))
+    enhanced_config["assumptions"] = agent_profile["capabilities"].get("assumptions", enhanced_config.get("assumptions", []))
+    enhanced_config["validation_rules"] = agent_profile["capabilities"].get("validation_rules", enhanced_config.get("validation_rules", []))
+    enhanced_config["job"] = agent_profile["capabilities"].get("job", enhanced_config.get("job", ""))
+    
     scenario_tuples = [
-        (scenario, agent_config, i) 
+        (scenario, enhanced_config, i) 
         for i, scenario in enumerate(scenario_dicts)
     ]
     

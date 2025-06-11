@@ -11,7 +11,7 @@ from typing import Dict, List, Any, Optional, Tuple
 from datetime import datetime
 import os
 from contextlib import nullcontext
-from pydantic import BaseModel, Field
+# Pydantic imports moved to ToolBehaviorEngine
 
 # Create Modal application
 app = modal.App("arc-production")
@@ -44,172 +44,8 @@ arc_image = (
     )
 )
 
-# Pydantic models for tool inputs
-class WeatherInput(BaseModel):
-    """Input schema for weather tool"""
-    city: str = Field(description="The name of the city to get weather for")
-
-class DatabaseInput(BaseModel):
-    """Input schema for database search tool"""
-    query: str = Field(description="The search query or SQL statement")
-    table: str = Field(description="The database table to search in")
-
-# Tool implementations with tracing
-def get_weather(city: str, trajectory_capture=None) -> str:
-    """Get current weather for a specified city. Returns weather data including temperature, conditions, and other metrics."""
-    start_time = time.time()
-    print(f"[TOOL] get_weather called with city: {city}")
-    
-    # Realistic weather database
-    weather_db = {
-        "new york": {
-            "location": {"name": "New York", "country": "USA", "lat": 40.7128, "lon": -74.0060},
-            "current": {
-                "temp_f": 72,
-                "temp_c": 22,
-                "condition": {"text": "Partly cloudy", "icon": "//cdn.weatherapi.com/weather/64x64/day/116.png"},
-                "wind_mph": 8,
-                "wind_dir": "NW",
-                "pressure_mb": 1020,
-                "humidity": 65,
-                "cloud": 25,
-                "feelslike_f": 70,
-                "uv": 6
-            }
-        },
-        "london": {
-            "location": {"name": "London", "country": "UK", "lat": 51.5074, "lon": -0.1278},
-            "current": {
-                "temp_f": 59,
-                "temp_c": 15,
-                "condition": {"text": "Light rain", "icon": "//cdn.weatherapi.com/weather/64x64/day/296.png"},
-                "wind_mph": 12,
-                "wind_dir": "SW", 
-                "pressure_mb": 1013,
-                "humidity": 85,
-                "cloud": 75,
-                "feelslike_f": 57,
-                "uv": 2
-            }
-        },
-        "tokyo": {
-            "location": {"name": "Tokyo", "country": "Japan", "lat": 35.6762, "lon": 139.6503},
-            "current": {
-                "temp_f": 68,
-                "temp_c": 20,
-                "condition": {"text": "Clear", "icon": "//cdn.weatherapi.com/weather/64x64/day/113.png"},
-                "wind_mph": 5,
-                "wind_dir": "E",
-                "pressure_mb": 1018,
-                "humidity": 55,
-                "cloud": 10,
-                "feelslike_f": 66,
-                "uv": 7
-            }
-        },
-        "sydney": {
-            "location": {"name": "Sydney", "country": "Australia", "lat": -33.8688, "lon": 151.2093},
-            "current": {
-                "temp_f": 77,
-                "temp_c": 25,
-                "condition": {"text": "Sunny", "icon": "//cdn.weatherapi.com/weather/64x64/day/113.png"},
-                "wind_mph": 10,
-                "wind_dir": "NE",
-                "pressure_mb": 1022,
-                "humidity": 45,
-                "cloud": 0,
-                "feelslike_f": 75,
-                "uv": 9
-            }
-        }
-    }
-    
-    city_normalized = city.lower().strip()
-    if city_normalized in weather_db:
-        result = json.dumps(weather_db[city_normalized], indent=2)
-        success = True
-    else:
-        result = json.dumps({
-            "error": {
-                "code": 1006,
-                "message": f"No matching location found for '{city}'."
-            }
-        }, indent=2)
-        success = False
-        if trajectory_capture:
-            trajectory_capture.capture_error(
-                "invalid_location",
-                f"Location '{city}' not found",
-                recovery_attempted=False
-            )
-    
-    # Capture tool call
-    duration_ms = (time.time() - start_time) * 1000
-    if trajectory_capture:
-        trajectory_capture.capture_tool_call(
-            "get_weather", city, result, duration_ms, success
-        )
-    
-    return result
-
-def search_database(query: str, table: str, trajectory_capture=None) -> str:
-    """Search a database table with the specified query. Returns matching records or an error if the table doesn't exist."""
-    start_time = time.time()
-    print(f"[TOOL] search_database called with query: {query}, table: {table}")
-    
-    # Simulate latency
-    time.sleep(0.5)
-    
-    # Mock database responses
-    if table == "products":
-        result = json.dumps({
-            "results": [
-                {"id": 1, "name": "Widget A", "price": 29.99, "stock": 150},
-                {"id": 2, "name": "Widget B", "price": 39.99, "stock": 75}
-            ],
-            "total": 2
-        })
-        success = True
-    elif table == "customers":
-        result = json.dumps({
-            "results": [
-                {"id": 101, "name": "John Doe", "email": "john@example.com", "status": "active"},
-                {"id": 102, "name": "Jane Smith", "email": "jane@example.com", "status": "active"}
-            ],
-            "total": 2
-        })
-        success = True
-    elif table == "transactions":
-        result = json.dumps({
-            "results": [
-                {"id": 1001, "customer_id": 101, "amount": 99.99, "currency": "USD", "status": "completed"},
-                {"id": 1002, "customer_id": 102, "amount": 149.99, "currency": "EUR", "status": "pending"}
-            ],
-            "total": 2
-        })
-        success = True
-    else:
-        result = json.dumps({"error": f"Table '{table}' not found"})
-        success = False
-        if trajectory_capture:
-            trajectory_capture.capture_error(
-                "invalid_table",
-                f"Table '{table}' not found",
-                recovery_attempted=False
-            )
-    
-    # Capture tool call
-    duration_ms = (time.time() - start_time) * 1000
-    if trajectory_capture:
-        trajectory_capture.capture_tool_call(
-            "search_database", 
-            {"query": query, "table": table},
-            result,
-            duration_ms,
-            success
-        )
-    
-    return result
+# Note: Tool implementations have been moved to ToolBehaviorEngine
+# which dynamically creates tools based on agent configuration
 
 @app.function(
     image=arc_image,
@@ -248,27 +84,28 @@ def evaluate_single_scenario(
     # Initialize trajectory capture for this scenario
     trajectory_capture = TrajectoryCapture()
     
-    # Register tools with trajectory capture and proper schemas
-    @tool(args_schema=WeatherInput)
-    def wrapped_get_weather(city: str) -> str:
-        """Get current weather for a specified city. Returns weather data including temperature, conditions, and other metrics."""
-        return get_weather(city, trajectory_capture=trajectory_capture)
+    # Import our dynamic tool behavior engine
+    from arc.sandbox.engine.tool_behavior_engine import ToolBehaviorEngine
     
-    @tool(args_schema=DatabaseInput)
-    def wrapped_search_database(query: str, table: str) -> str:
-        """Search a database table with the specified query. Returns matching records or an error if the table doesn't exist."""
-        return search_database(query, table, trajectory_capture=trajectory_capture)
-    
-    available_tools = {
-        "get_weather": wrapped_get_weather,
-        "search_database": wrapped_search_database
+    # Create dynamic tools based on agent configuration
+    # Build agent profile from config (for backward compatibility)
+    agent_profile = {
+        "configuration": agent_config,
+        "assumptions": agent_config.get("assumptions", []),
+        "validation_rules": agent_config.get("validation_rules", []),
+        "job": agent_config.get("job", ""),
     }
     
-    # Build tool list from config
-    tools = []
-    for tool_name in agent_config.get("tools", []):
-        if tool_name in available_tools:
-            tools.append(available_tools[tool_name])
+    # Create tool behavior engine with scenario context
+    tool_engine = ToolBehaviorEngine(
+        agent_profile=agent_profile,
+        scenario_context=scenario
+    )
+    
+    # Generate tools dynamically based on agent's actual tool definitions
+    tools = tool_engine.create_tools()
+    
+    print(f"[CONTAINER-{scenario_index}] Created {len(tools)} tools dynamically")
     
     # Initialize LLM with stream_usage for proper token counting
     # Handle model ID prefixes (e.g., "openai/gpt-4.1" -> "gpt-4.1-2025-04-14")

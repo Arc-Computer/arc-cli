@@ -271,8 +271,26 @@ def evaluate_single_scenario(
             tools.append(available_tools[tool_name])
     
     # Initialize LLM with stream_usage for proper token counting
+    # Handle model ID prefixes (e.g., "openai/gpt-4.1" -> "gpt-4.1-2025-04-14")
+    model_id = agent_config["model"]
+    
+    # Map model IDs to actual OpenAI model names
+    model_mapping = {
+        "openai/gpt-4.1": "gpt-4.1-2025-04-14",
+        "gpt-4.1": "gpt-4.1-2025-04-14",
+        "openai/gpt-4.1-mini": "gpt-4.1-mini",
+        "gpt-4.1-mini": "gpt-4.1-mini",
+    }
+    
+    # Use mapped model or fallback to original if not in mapping
+    actual_model = model_mapping.get(model_id, model_id)
+    
+    # If it still has a provider prefix, strip it
+    if "/" in actual_model and actual_model.startswith(("openai/", "anthropic/", "google/")):
+        actual_model = actual_model.split("/", 1)[1]
+    
     llm = ChatOpenAI(
-        model=agent_config["model"],
+        model=actual_model,
         temperature=agent_config["temperature"],
         streaming=True,
         stream_usage=True  # Essential for token counting with streaming

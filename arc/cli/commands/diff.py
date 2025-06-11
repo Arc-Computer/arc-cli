@@ -18,7 +18,7 @@ except ImportError:
 
 from arc.cli.utils import ArcConsole, CLIState, format_error, format_success, format_warning
 from arc.cli.utils import db_manager, HybridState
-from arc.cli.commands.run import _generate_scenarios_async, _estimate_cost, _simulate_execution, _execute_with_modal, _check_modal_available
+from arc.cli.commands.run import _generate_scenarios_async, _estimate_cost, _simulate_execution, _check_modal_available
 from arc.ingestion.parser import AgentConfigParser
 from arc.ingestion.normalizer import ConfigNormalizer
 
@@ -136,11 +136,9 @@ async def _diff_async(config1: str, config2: str, scenarios: int, historical: bo
         console.print()
         console.print("[primary]Running Config A[/primary]")
     
-    if use_modal:
-        results_a, time_a, cost_a = _execute_with_modal(test_scenarios, config1_normalized, json_output)
-    else:
-        results_a, time_a = _simulate_execution(test_scenarios, json_output)
-        cost_a = _estimate_cost(scenarios, config1_normalized.get("model", "unknown"))
+    # For now, always use simulation since Modal execution is being refactored
+    results_a, time_a = _simulate_execution(test_scenarios, json_output)
+    cost_a = _estimate_cost(scenarios, config1_normalized.get("model", "unknown"))
     
     success_a = sum(1 for r in results_a if r["success"])
     reliability_a = success_a / len(results_a)

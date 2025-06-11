@@ -110,7 +110,7 @@ class ConfigAnalysisLoader:
         # Create summary table
         summary_table = Table(title="Agent Configuration Summary", show_header=True)
         summary_table.add_column("Property", style="info", width=20)
-        summary_table.add_column("Value", style="primary")
+        summary_table.add_column("Value", style="#3B82F6")
         
         # Basic configuration
         summary_table.add_row("Model", config.get("model", "Unknown"))
@@ -210,8 +210,8 @@ class ExecutionProgressLoader:
         
         return Panel(
             content,
-            title="[primary]Live Execution Metrics[/primary]",
-            border_style="primary",
+            title="[#3B82F6]Live Execution Metrics[/#3B82F6]",
+            border_style="#3B82F6",
             padding=(0, 1)
         )
     

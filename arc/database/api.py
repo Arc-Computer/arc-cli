@@ -107,24 +107,6 @@ class ArcAPI:
                 scenario_dicts.append(scenario_dict)
                 scenario_ids.append(scenario_dict.get("id", f"scenario_{i}"))
             
-            # First, create/ensure scenarios exist in the scenarios table
-            async with self.db.engine.begin() as conn:
-                for i, scenario_dict in enumerate(scenario_dicts):
-                    scenario_id = scenario_dict.get("id", f"scenario_{i}")
-                    scenario_name = scenario_dict.get("name", scenario_dict.get("task", f"Scenario {i+1}"))
-                    task_prompt = scenario_dict.get("task", scenario_dict.get("task_prompt", ""))
-                    
-                    # Insert scenario if it doesn't exist (using ON CONFLICT DO NOTHING for PostgreSQL)
-                    await conn.execute(text("""
-                        INSERT INTO scenarios (scenario_id, name, task_prompt, created_at)
-                        VALUES (:scenario_id, :name, :task_prompt, NOW())
-                        ON CONFLICT (scenario_id) DO NOTHING
-                    """), {
-                        "scenario_id": scenario_id,
-                        "name": scenario_name[:200],  # Limit length
-                        "task_prompt": task_prompt
-                    })
-            
             # Ensure scenarios exist before creating simulation
             for i, scenario_dict in enumerate(scenario_dicts):
                 await self.db.ensure_scenario_exists(
@@ -440,17 +422,28 @@ class ArcAPI:
             else:
                 scenario_id = f"scenario_{call_index}"
             
+            # Prepare trajectory with required fields
+            execution_time = datetime.now(timezone.utc)
+            status = "success" if modal_result.get("success", False) else "error"
+            
+            # Ensure trajectory has required fields
+            trajectory = modal_result.copy() if isinstance(modal_result, dict) else {}
+            if "start_time" not in trajectory:
+                trajectory["start_time"] = execution_time.isoformat()
+            if "status" not in trajectory:
+                trajectory["status"] = status
+            
             # Transform Modal result to outcome format
             outcome_data = {
                 "simulation_id": simulation_id,
                 "scenario_id": scenario_id,
-                "execution_time": datetime.now(timezone.utc),
-                "status": "success" if modal_result.get("success", False) else "error",
+                "execution_time": execution_time,
+                "status": status,
                 "reliability_score": modal_result.get("reliability_score", 0.5),
                 "execution_time_ms": int(modal_result.get("execution_time", 0) * 1000),
                 "tokens_used": modal_result.get("tokens_used", 100),
                 "cost_usd": modal_result.get("cost", 0.001),
-                "trajectory": modal_result,  # Raw Modal result as trajectory
+                "trajectory": trajectory,
                 "modal_call_id": f"modal_call_{call_index}",
                 "sandbox_id": f"sandbox_{call_index}"
             }
@@ -492,7 +485,14 @@ class ArcAPI:
         try:
             # Calculate aggregate metrics from Modal results
             successful_runs = sum(1 for r in modal_results if r.get("success", False))
-            avg_reliability = sum(r.get("reliability_score", 0.5) for r in modal_results) / len(modal_results) if modal_results else 0
+            
+            # Calculate average reliability only from results with explicit scores
+            results_with_scores = [r for r in modal_results if "reliability_score" in r]
+            if results_with_scores:
+                avg_reliability = sum(r["reliability_score"] for r in results_with_scores) / len(results_with_scores)
+            else:
+                # Default to 0.5 if no results have reliability scores
+                avg_reliability = 0.5 if modal_results else 0
             
             # Create suite result automatically
             suite_result = {

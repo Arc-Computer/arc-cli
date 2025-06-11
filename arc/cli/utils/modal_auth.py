@@ -15,28 +15,33 @@ def setup_modal_auth(
     Setup Modal authentication with various methods.
 
     Priority order:
-    1. Provided tokens (for shared/demo accounts)
-    2. Environment variables (MODAL_TOKEN_ID, MODAL_TOKEN_SECRET)
-    3. Arc-provided demo tokens (ARC_MODAL_TOKEN_ID, ARC_MODAL_TOKEN_SECRET)
-    4. User's own Modal config (~/.modal.toml)
-    5. Modal workspace deployment (MODAL_WORKSPACE env var)
+    1. Modal workspace deployment (MODAL_IDENTITY_TOKEN or MODAL_TASK_ID)
+    2. Provided tokens (for shared/demo accounts)
+    3. Environment variables (MODAL_TOKEN_ID, MODAL_TOKEN_SECRET)
+    4. Arc-provided demo tokens (ARC_MODAL_TOKEN_ID, ARC_MODAL_TOKEN_SECRET)
+    5. User's own Modal config (~/.modal.toml)
 
     Returns:
         True if authentication is configured, False otherwise
     """
-    # Method 1: Use provided tokens
+    # Method 1: Check if running inside Modal workspace/container
+    if os.environ.get("MODAL_IDENTITY_TOKEN") or os.environ.get("MODAL_TASK_ID"):
+        console.print("Running inside Modal workspace deployment", style="info")
+        return True
+    
+    # Method 2: Use provided tokens
     if token_id and token_secret:
         os.environ["MODAL_TOKEN_ID"] = token_id
         os.environ["MODAL_TOKEN_SECRET"] = token_secret
         console.print("Using provided Modal credentials", style="info")
         return True
 
-    # Method 2: Check if already set in environment
+    # Method 3: Check if already set in environment
     if os.environ.get("MODAL_TOKEN_ID") and os.environ.get("MODAL_TOKEN_SECRET"):
         console.print("Using existing Modal environment credentials", style="info")
         return True
 
-    # Method 3: Check for Arc-provided demo tokens
+    # Method 4: Check for Arc-provided demo tokens
     arc_token_id = os.environ.get("ARC_MODAL_TOKEN_ID")
     arc_token_secret = os.environ.get("ARC_MODAL_TOKEN_SECRET")
 
@@ -49,7 +54,7 @@ def setup_modal_auth(
         )
         return True
 
-    # Method 4: Check for user's Modal config
+    # Method 5: Check for user's Modal config
     modal_config_path = Path.home() / ".modal.toml"
     if modal_config_path.exists():
         console.print("Using user's Modal configuration", style="info")

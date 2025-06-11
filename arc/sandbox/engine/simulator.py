@@ -13,7 +13,14 @@ import modal
 # Pydantic imports moved to ToolBehaviorEngine
 
 # Create Modal application
-app = modal.App("arc-production")
+# If running in a deployed environment, use the existing app
+# Otherwise create a new app for local development
+if os.environ.get("MODAL_IDENTITY_TOKEN") or os.environ.get("MODAL_TASK_ID"):
+    # Running inside Modal - use existing app context
+    app = modal.App.lookup("arc-production")
+else:
+    # Local development - create new app
+    app = modal.App("arc-production")
 
 # Get the project root directory
 project_root = os.path.dirname(

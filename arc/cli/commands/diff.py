@@ -1,16 +1,15 @@
-"""Arc diff command - compare two agent configurations."""
+"""Arc diff command - compare two agent run results."""
 
 import asyncio
-from typing import Any, Dict, Optional, List
+from typing import Any, Dict, Optional, List, Tuple
 from datetime import datetime
-from uuid import uuid4
+from pathlib import Path
 
 import click
 from rich.table import Table
 from rich.panel import Panel
 import numpy as np
-from scipy.stats import chi2_contingency
-from sqlalchemy import text
+from scipy.stats import chi2_contingency, fisher_exact
 try:
     from statsmodels.stats.power import ttest_power
 except ImportError:
@@ -18,9 +17,6 @@ except ImportError:
 
 from arc.cli.utils import ArcConsole, CLIState, format_error, format_success, format_warning
 from arc.cli.utils import db_manager, HybridState
-from arc.cli.commands.run import _generate_scenarios_async, _estimate_cost, _simulate_execution, _check_modal_available
-from arc.ingestion.parser import AgentConfigParser
-from arc.ingestion.normalizer import ConfigNormalizer
 
 console = ArcConsole()
 # Will be initialized based on database availability
@@ -44,30 +40,74 @@ async def _initialize_state():
     return db_connected
 
 
+def _resolve_to_run_id(identifier: str) -> Tuple[Optional[str], Optional[str]]:
+    """Resolve an identifier to a run ID.
+    
+    Args:
+        identifier: Either a run ID or a config file path
+        
+    Returns:
+        Tuple of (run_id, config_name)
+    """
+    # Check if it's already a run ID (format: run_YYYYMMDD_HHMMSS_XXXXXXXX)
+    if identifier.startswith('run_'):
+        return identifier, None
+    
+    # Otherwise, treat as config path and find most recent run
+    config_path = Path(identifier)
+    if not config_path.exists():
+        # Maybe it's just a config name without path
+        config_name = identifier
+    else:
+        config_name = config_path.name
+    
+    # Find most recent run for this config
+    runs = state.list_runs(limit=100)  # Look through recent runs
+    for run in runs:
+        if run['config_path'].endswith(config_name) or run['config_path'] == identifier:
+            return run['run_id'], config_name
+    
+    return None, config_name
+
+
+def _find_common_scenarios(run1, run2) -> List[str]:
+    """Find scenarios that appear in both runs.
+    
+    Returns list of scenario IDs that are in both runs.
+    """
+    scenarios1 = {s.get('scenario_id', s.get('id', f'scenario_{i}')) 
+                  for i, s in enumerate(run1.scenarios)}
+    scenarios2 = {s.get('scenario_id', s.get('id', f'scenario_{i}')) 
+                  for i, s in enumerate(run2.scenarios)}
+    
+    return list(scenarios1.intersection(scenarios2))
+
+
+def _filter_results_to_scenarios(results: List[Dict], scenario_ids: List[str]) -> List[Dict]:
+    """Filter results to only include specified scenarios."""
+    scenario_set = set(scenario_ids)
+    return [r for r in results if r.get('scenario_id') in scenario_set]
+
+
 @click.command()
-@click.argument('config1', type=click.Path(exists=True))
-@click.argument('config2', type=click.Path(exists=True))
-@click.option('--scenarios', '-s', default=50, help='Number of scenarios per config (default: 50)')
-@click.option('--historical', is_flag=True, help='Include historical A/B test comparisons')
-@click.option('--modal/--no-modal', default=True, help='Use Modal for execution (default: True)')
+@click.argument('identifier1')
+@click.argument('identifier2')
+@click.option('--common-only', is_flag=True, help='Compare only scenarios that appear in both runs')
 @click.option('--json', 'json_output', is_flag=True, help='Output JSON instead of rich text')
-def diff(config1: str, config2: str, scenarios: int, historical: bool, modal: bool, json_output: bool):
-    """Compare two agent configurations with A/B testing.
+def diff(identifier1: str, identifier2: str, common_only: bool, json_output: bool):
+    """Compare two agent run results.
     
-    This command:
-    1. Runs both configurations on the same scenarios
-    2. Performs statistical significance testing
-    3. Shows improvement metrics
-    4. Validates claimed improvements
-    5. Stores results in database for historical tracking
+    This command compares the results of two previous runs to determine
+    which configuration performs better. You can specify either run IDs
+    or configuration file paths.
     
-    Example:
+    Examples:
+        arc diff run_20241105_143022 run_20241105_145510
         arc diff finance_agent_v1.yaml finance_agent_v2.yaml
-        arc diff config_a.yaml config_b.yaml --scenarios 100 --historical
+        arc diff old_config.yaml new_config.yaml --common-only
     """
     try:
-        # Run async diff
-        asyncio.run(_diff_async(config1, config2, scenarios, historical, modal, json_output))
+        asyncio.run(_diff_async(identifier1, identifier2, common_only, json_output))
     except Exception as e:
         if json_output:
             import json
@@ -77,314 +117,271 @@ def diff(config1: str, config2: str, scenarios: int, historical: bool, modal: bo
         raise click.exceptions.Exit(1)
 
 
-async def _diff_async(config1: str, config2: str, scenarios: int, historical: bool, modal: bool, json_output: bool):
-    """Perform async diff with database integration."""
+async def _diff_async(identifier1: str, identifier2: str, common_only: bool, json_output: bool):
+    """Perform async diff analysis."""
     # Initialize state
     db_connected = await _initialize_state()
     
     if not json_output:
         console.print()
-        console.print_header("A/B Configuration Comparison")
-    
-    # Parse both configurations
-    parser = AgentConfigParser()
-    normalizer = ConfigNormalizer()
-    
-    config1_parsed = parser.parse(config1)
-    config1_normalized = normalizer.normalize(config1_parsed)
-    
-    config2_parsed = parser.parse(config2)
-    config2_normalized = normalizer.normalize(config2_parsed)
-    
-    if not json_output:
-        console.print_metric("Config A", config1)
-        console.print_metric("Config B", config2)
-        console.print_metric("Scenarios per config", scenarios)
-        console.print_metric("Execution mode", "Modal" if modal and _check_modal_available() else "Local simulation")
+        console.print(Panel.fit(
+            "[primary]Arc Run Comparison[/primary]",
+            border_style="primary"
+        ))
         console.print()
     
-    # Get historical comparisons if requested
-    historical_comparisons = None
-    if historical and db_connected:
-        db_client = db_manager.get_client()
-        if db_client:
-            historical_comparisons = await _get_historical_comparisons(
-                db_client, 
-                config1.split("/")[-1], 
-                config2.split("/")[-1]
-            )
+    # Resolve identifiers to run IDs
+    run_id1, config_name1 = _resolve_to_run_id(identifier1)
+    run_id2, config_name2 = _resolve_to_run_id(identifier2)
     
-    # Generate scenarios (same for both configs)
-    if not json_output:
-        console.print("Generating test scenarios...", style="muted")
-    
-    test_scenarios = await _generate_scenarios_async(
-        config_path=config1,
-        count=scenarios,
-        pattern_ratio=0.7,
-        capabilities=parser.extract_capabilities(config1_parsed),
-        json_output=json_output
-    )
-    
-    # Create unique diff session ID
-    diff_id = f"diff_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid4().hex[:8]}"
-    
-    # Execute both configurations
-    use_modal = modal and _check_modal_available()
+    if not run_id1:
+        raise ValueError(f"No run found for '{identifier1}'")
+    if not run_id2:
+        raise ValueError(f"No run found for '{identifier2}'")
     
     if not json_output:
+        console.print(f"Comparing runs:")
+        console.print(f"  Run 1: {run_id1}" + (f" ({config_name1})" if config_name1 else ""))
+        console.print(f"  Run 2: {run_id2}" + (f" ({config_name2})" if config_name2 else ""))
         console.print()
-        console.print("[primary]Running Config A[/primary]")
     
-    # For now, always use simulation since Modal execution is being refactored
-    results_a, time_a = _simulate_execution(test_scenarios, json_output)
-    cost_a = _estimate_cost(scenarios, config1_normalized.get("model", "unknown"))
+    # Load run results
+    run1 = state.get_run(run_id1)
+    run2 = state.get_run(run_id2)
     
-    success_a = sum(1 for r in results_a if r["success"])
-    reliability_a = success_a / len(results_a)
+    if not run1:
+        raise ValueError(f"Run {run_id1} not found")
+    if not run2:
+        raise ValueError(f"Run {run_id2} not found")
+    
+    # Check scenario compatibility
+    common_scenarios = _find_common_scenarios(run1, run2)
     
     if not json_output:
-        console.print(format_success(f"Config A: {reliability_a:.1%} reliability"))
+        console.print(f"Run 1 scenarios: {len(run1.scenarios)}")
+        console.print(f"Run 2 scenarios: {len(run2.scenarios)}")
+        console.print(f"Common scenarios: {len(common_scenarios)}")
         console.print()
-        console.print("[primary]Running Config B[/primary]")
     
-    if use_modal:
-        results_b, time_b, cost_b = _execute_with_modal(test_scenarios, config2_normalized, json_output)
+    # Filter to common scenarios if requested or if sets are very different
+    if common_only or len(common_scenarios) < min(len(run1.scenarios), len(run2.scenarios)) * 0.8:
+        if not common_scenarios:
+            raise ValueError("No common scenarios found between runs")
+        
+        if not json_output and not common_only:
+            console.print(format_warning(
+                f"Only {len(common_scenarios)} scenarios in common. Comparing only common scenarios."
+            ))
+            console.print()
+        
+        # Filter results to common scenarios
+        results1 = _filter_results_to_scenarios(run1.results, common_scenarios)
+        results2 = _filter_results_to_scenarios(run2.results, common_scenarios)
     else:
-        results_b, time_b = _simulate_execution(test_scenarios, json_output)
-        cost_b = _estimate_cost(scenarios, config2_normalized.get("model", "unknown"))
-    
-    success_b = sum(1 for r in results_b if r["success"])
-    reliability_b = success_b / len(results_b)
-    
-    if not json_output:
-        console.print(format_success(f"Config B: {reliability_b:.1%} reliability"))
-        console.print()
+        results1 = run1.results
+        results2 = run2.results
     
     # Perform statistical analysis
-    analysis = _perform_statistical_analysis(results_a, results_b)
-        
+    analysis = _perform_statistical_analysis(results1, results2)
     
-    # Create diff result
-    diff_result = {
-        "diff_id": diff_id,
-        "timestamp": datetime.now().isoformat(),
-        "config_a": {
-            "path": config1,
-            "model": config1_normalized.get("model", "unknown"),
-            "reliability": reliability_a,
-            "successes": success_a,
-            "failures": len(results_a) - success_a,
-            "cost": cost_a,
-            "execution_time": time_a
+    # Create comparison summary
+    comparison = {
+        "run1": {
+            "run_id": run_id1,
+            "config_path": run1.config_path,
+            "timestamp": run1.timestamp.isoformat() if hasattr(run1.timestamp, 'isoformat') else str(run1.timestamp),
+            "total_scenarios": len(run1.scenarios),
+            "compared_scenarios": len(results1),
+            "reliability": run1.reliability_score,
+            "successes": sum(1 for r in results1 if r.get('success', False)),
+            "failures": sum(1 for r in results1 if not r.get('success', False)),
         },
-        "config_b": {
-            "path": config2,
-            "model": config2_normalized.get("model", "unknown"),
-            "reliability": reliability_b,
-            "successes": success_b,
-            "failures": len(results_b) - success_b,
-            "cost": cost_b,
-            "execution_time": time_b
+        "run2": {
+            "run_id": run_id2,
+            "config_path": run2.config_path,
+            "timestamp": run2.timestamp.isoformat() if hasattr(run2.timestamp, 'isoformat') else str(run2.timestamp),
+            "total_scenarios": len(run2.scenarios),
+            "compared_scenarios": len(results2),
+            "reliability": run2.reliability_score,
+            "successes": sum(1 for r in results2 if r.get('success', False)),
+            "failures": sum(1 for r in results2 if not r.get('success', False)),
         },
         "comparison": {
-            "improvement": reliability_b - reliability_a,
-            "improvement_percentage": (reliability_b - reliability_a) * 100,
-            "relative_improvement": ((reliability_b - reliability_a) / reliability_a * 100) if reliability_a > 0 else 0,
-            "cost_difference": cost_b - cost_a
+            "scenarios_compared": len(results1),
+            "improvement": analysis['reliability_b'] - analysis['reliability_a'],
+            "improvement_percentage": (analysis['reliability_b'] - analysis['reliability_a']) * 100,
+            "relative_improvement": ((analysis['reliability_b'] - analysis['reliability_a']) / analysis['reliability_a'] * 100) 
+                                   if analysis['reliability_a'] > 0 else 0,
         },
-        "statistical_analysis": analysis,
-        "scenario_count": scenarios,
-        "execution_mode": "modal" if use_modal else "simulation"
+        "statistical_analysis": analysis
     }
     
-    # Save diff result
-    state.save_diff(diff_id, diff_result)
-    
-    # Save to database if available
-    if db_connected and isinstance(state, HybridState):
-        db_client = db_manager.get_client()
-        if db_client:
-            try:
-                await _save_diff_to_database(db_client, diff_result, results_a, results_b)
-            except Exception as e:
-                console.print(f"Warning: Failed to save diff to database: {str(e)}", style="warning")
+    # Find scenario-level differences
+    scenario_differences = _analyze_scenario_differences(results1, results2)
+    comparison['scenario_differences'] = scenario_differences
     
     # Display results
     if json_output:
         import json
-        if historical_comparisons:
-            diff_result["historical_comparisons"] = historical_comparisons
-        print(json.dumps(diff_result, indent=2))
+        print(json.dumps(comparison, indent=2))
     else:
-            # Results comparison table
-            console.print_header("Results Comparison")
-            
-            table = Table(show_header=True, header_style="bold")
-            table.add_column("Metric", style="muted")
-            table.add_column("Config A", justify="right")
-            table.add_column("Config B", justify="right")
-            table.add_column("Difference", justify="right")
-            
-            # Reliability
-            rel_diff = reliability_b - reliability_a
-            rel_style = "success" if rel_diff > 0 else "error" if rel_diff < 0 else "muted"
-            table.add_row(
-                "Reliability",
-                f"{reliability_a:.1%}",
-                f"{reliability_b:.1%}",
-                f"{rel_diff:+.1%}"
-            )
-            
-            # Success/Failure counts
-            table.add_row(
-                "Successes",
-                str(success_a),
-                str(success_b),
-                f"{success_b - success_a:+d}"
-            )
-            
-            table.add_row(
-                "Failures",
-                str(len(results_a) - success_a),
-                str(len(results_b) - success_b),
-                f"{(len(results_b) - success_b) - (len(results_a) - success_a):+d}"
-            )
-            
-            console.print(table)
-            console.print()
-            
-            # Statistical validation
-            console.print_header("Statistical Validation")
-            
-            # Display statistical warnings
-            statistical_warnings = analysis.get("statistical_warnings", [])
-            if statistical_warnings:
-                for warning in statistical_warnings:
-                    console.print(format_warning(warning))
-                console.print()
-
-            # Statistical significance (only if we have a valid test)
-            if analysis.get("valid_statistical_test", False):
-                if analysis["significant"]:
-                    console.print(format_success(f"✓ Difference is statistically significant (p = {analysis['p_value']:.4f})"))
-                else:
-                    console.print(format_warning(f"Difference is NOT statistically significant (p = {analysis['p_value']:.4f})"))
-            else:
-                console.print(format_warning("Statistical significance test could not be performed"))
-
-            console.print_metric("Test type", analysis.get("test_type", "unknown"))
-            console.print_metric("Effect size (Cohen's h)", f"{analysis['effect_size']:.2f} ({analysis['interpretation']})")
-            console.print_metric("Confidence interval", f"[{analysis['ci_lower']:.1%}, {analysis['ci_upper']:.1%}]")
-            if analysis.get("power") is not None:
-                console.print_metric("Statistical power", f"{analysis['power']:.2f}")
-            console.print()
-
-            # Interpretation
-            if analysis.get("significant") and rel_diff > 0:
-                relative_improvement = (rel_diff/reliability_a*100) if reliability_a > 0 else float('inf')
-                console.print(Panel.fit(
-                    f"[success]Config B shows a {rel_diff*100:.1f} percentage point improvement[/success]\n"
-                    f"This represents a {relative_improvement:.1f}% relative improvement" if reliability_a > 0 else "Config A had 0% reliability",
-                    title="Conclusion",
-                    border_style="success"
-                ))
-            elif analysis.get("significant") and rel_diff < 0:
-                relative_decrease = abs(rel_diff/reliability_a*100) if reliability_a > 0 else float('inf')
-                console.print(Panel.fit(
-                    f"[error]Config B shows a {abs(rel_diff)*100:.1f} percentage point regression[/error]\n"
-                    f"This represents a {relative_decrease:.1f}% relative decrease" if reliability_a > 0 else "Config A had 0% reliability",
-                    title="Conclusion",
-                    border_style="error"
-                ))
-            else:
-                console.print(Panel.fit(
-                    "[warning]No significant difference between configurations[/warning]\n"
-                    "Consider running with more scenarios for higher statistical power",
-                    title="Conclusion",
-                    border_style="warning"
-                ))
-            console.print()
-            
-            # Show historical comparisons if available
-            if historical_comparisons and historical_comparisons.get("previous_diffs"):
-                console.print_header("Historical Context")
-                console.print(f"Found {len(historical_comparisons['previous_diffs'])} previous comparisons")
-                
-                hist_table = Table(show_header=True, header_style="bold")
-                hist_table.add_column("Date", style="muted")
-                hist_table.add_column("Config A Reliability", justify="right")
-                hist_table.add_column("Config B Reliability", justify="right") 
-                hist_table.add_column("Improvement", justify="right")
-                hist_table.add_column("Significant", justify="center")
-                
-                for diff in historical_comparisons["previous_diffs"][:5]:
-                    hist_table.add_row(
-                        diff["date"],
-                        f"{diff['reliability_a']:.1%}",
-                        f"{diff['reliability_b']:.1%}",
-                        f"{diff['improvement']:+.1%}",
-                        "✓" if diff["significant"] else "✗"
-                    )
-                
-                console.print(hist_table)
-                console.print()
+        _display_comparison(comparison, analysis, scenario_differences)
 
 
-async def _get_historical_comparisons(db_client, config1_name: str, config2_name: str) -> dict:
-    """Get historical A/B test comparisons from database."""
-    query = text("""
-    SELECT 
-        cd.created_at,
-        cd.config_a_reliability,
-        cd.config_b_reliability,
-        cd.improvement_percentage,
-        cd.is_significant,
-        cd.p_value,
-        cd.effect_size,
-        cd.scenario_count
-    FROM config_diffs cd
-    WHERE (cd.config_a_name = :config1 AND cd.config_b_name = :config2)
-       OR (cd.config_a_name = :config2 AND cd.config_b_name = :config1)
-    ORDER BY cd.created_at DESC
-    LIMIT 10
-    """)
+def _analyze_scenario_differences(results1: List[Dict], results2: List[Dict]) -> Dict:
+    """Analyze differences at the scenario level."""
+    # Create result maps by scenario ID
+    results1_map = {r['scenario_id']: r for r in results1}
+    results2_map = {r['scenario_id']: r for r in results2}
     
-    async with db_client.engine.begin() as conn:
-        result = await conn.execute(query, {"config1": config1_name, "config2": config2_name})
+    improved = []
+    regressed = []
+    unchanged = []
     
-    previous_diffs = []
-    for row in result:
-        previous_diffs.append({
-            "date": row[0].strftime("%Y-%m-%d"),
-            "reliability_a": float(row[1] or 0),
-            "reliability_b": float(row[2] or 0),
-            "improvement": float(row[3] or 0) / 100,
-            "significant": row[4],
-            "p_value": float(row[5] or 0),
-            "effect_size": float(row[6] or 0),
-            "scenarios": row[7]
-        })
+    for scenario_id in results1_map:
+        if scenario_id in results2_map:
+            success1 = results1_map[scenario_id].get('success', False)
+            success2 = results2_map[scenario_id].get('success', False)
+            
+            if not success1 and success2:
+                improved.append(scenario_id)
+            elif success1 and not success2:
+                regressed.append(scenario_id)
+            else:
+                unchanged.append(scenario_id)
     
     return {
-        "previous_diffs": previous_diffs,
-        "comparison_count": len(previous_diffs)
+        "improved": improved,
+        "regressed": regressed,
+        "unchanged": unchanged,
+        "improvement_count": len(improved),
+        "regression_count": len(regressed),
+        "unchanged_count": len(unchanged)
     }
 
 
-async def _save_diff_to_database(db_client, diff_result: dict, results_a: list, results_b: list):
-    """Save A/B test comparison to database."""
-    # This would save to config_diffs table
-    # For now, we'll create the necessary data structure
-    config_a_name = diff_result["config_a"]["path"].split("/")[-1]
-    config_b_name = diff_result["config_b"]["path"].split("/")[-1]
+def _display_comparison(comparison: Dict, analysis: Dict, scenario_differences: Dict):
+    """Display comparison results in rich format."""
+    # Results comparison table
+    console.print_header("Results Comparison")
     
-    # Would execute INSERT to config_diffs table here
-    pass
+    table = Table(show_header=True, header_style="bold")
+    table.add_column("Metric", style="muted")
+    table.add_column("Run 1", justify="right")
+    table.add_column("Run 2", justify="right")
+    table.add_column("Difference", justify="right")
+    
+    # Reliability
+    rel1 = comparison['run1']['reliability']
+    rel2 = comparison['run2']['reliability']
+    rel_diff = rel2 - rel1
+    
+    table.add_row(
+        "Reliability",
+        f"{rel1:.1%}",
+        f"{rel2:.1%}",
+        f"{rel_diff:+.1%}"
+    )
+    
+    # Success/Failure counts
+    table.add_row(
+        "Successes",
+        str(comparison['run1']['successes']),
+        str(comparison['run2']['successes']),
+        f"{comparison['run2']['successes'] - comparison['run1']['successes']:+d}"
+    )
+    
+    table.add_row(
+        "Failures",
+        str(comparison['run1']['failures']),
+        str(comparison['run2']['failures']),
+        f"{comparison['run2']['failures'] - comparison['run1']['failures']:+d}"
+    )
+    
+    table.add_row(
+        "Scenarios compared",
+        str(comparison['comparison']['scenarios_compared']),
+        str(comparison['comparison']['scenarios_compared']),
+        "-"
+    )
+    
+    console.print(table)
+    console.print()
+    
+    # Scenario-level changes
+    if scenario_differences['improvement_count'] > 0 or scenario_differences['regression_count'] > 0:
+        console.print_header("Scenario-Level Changes")
+        
+        if scenario_differences['improvement_count'] > 0:
+            console.print(f"[success]✓ {scenario_differences['improvement_count']} scenarios improved[/success]")
+        
+        if scenario_differences['regression_count'] > 0:
+            console.print(f"[error]✗ {scenario_differences['regression_count']} scenarios regressed[/error]")
+        
+        console.print(f"[muted]• {scenario_differences['unchanged_count']} scenarios unchanged[/muted]")
+        console.print()
+    
+    # Statistical validation
+    console.print_header("Statistical Validation")
+    
+    # Display statistical warnings
+    statistical_warnings = analysis.get("statistical_warnings", [])
+    if statistical_warnings:
+        for warning in statistical_warnings:
+            console.print(format_warning(warning))
+        console.print()
+    
+    # Statistical significance
+    if analysis.get("valid_statistical_test", False):
+        if analysis["significant"]:
+            console.print(format_success(f"✓ Difference is statistically significant (p = {analysis['p_value']:.4f})"))
+        else:
+            console.print(format_warning(f"Difference is NOT statistically significant (p = {analysis['p_value']:.4f})"))
+    else:
+        console.print(format_warning("Statistical significance test could not be performed"))
+    
+    console.print_metric("Test type", analysis.get("test_type", "unknown"))
+    console.print_metric("Effect size (Cohen's h)", f"{analysis['effect_size']:.2f} ({analysis['interpretation']})")
+    console.print_metric("Confidence interval", f"[{analysis['ci_lower']:.1%}, {analysis['ci_upper']:.1%}]")
+    
+    if analysis.get("power") is not None:
+        console.print_metric("Statistical power", f"{analysis['power']:.2f}")
+    console.print()
+    
+    # Interpretation
+    if analysis.get("significant") and rel_diff > 0:
+        relative_improvement = (rel_diff/rel1*100) if rel1 > 0 else float('inf')
+        console.print(Panel.fit(
+            f"[success]Run 2 shows a {rel_diff*100:.1f} percentage point improvement[/success]\n"
+            f"This represents a {relative_improvement:.1f}% relative improvement" if rel1 > 0 else "Run 1 had 0% reliability",
+            title="Conclusion",
+            border_style="success"
+        ))
+    elif analysis.get("significant") and rel_diff < 0:
+        relative_decrease = abs(rel_diff/rel1*100) if rel1 > 0 else float('inf')
+        console.print(Panel.fit(
+            f"[error]Run 2 shows a {abs(rel_diff)*100:.1f} percentage point regression[/error]\n"
+            f"This represents a {relative_decrease:.1f}% relative decrease" if rel1 > 0 else "Run 1 had 0% reliability",
+            title="Conclusion",
+            border_style="error"
+        ))
+    else:
+        console.print(Panel.fit(
+            "[warning]No significant difference between runs[/warning]\n"
+            "Consider running with more scenarios for higher statistical power",
+            title="Conclusion",
+            border_style="warning"
+        ))
+    console.print()
+    
+    # Run information
+    console.print_header("Run Information")
+    console.print(f"Run 1: {comparison['run1']['config_path']} at {comparison['run1']['timestamp']}")
+    console.print(f"Run 2: {comparison['run2']['config_path']} at {comparison['run2']['timestamp']}")
 
 
 def _perform_statistical_analysis(results_a: list, results_b: list) -> Dict[str, Any]:
-    """Perform statistical analysis on A/B test results with proper validation."""
+    """Perform statistical analysis on run results with proper validation."""
     # Validate sample sizes
     n_a = len(results_a)
     n_b = len(results_b)
@@ -393,26 +390,23 @@ def _perform_statistical_analysis(results_a: list, results_b: list) -> Dict[str,
     sample_size_warning = None
     
     if n_a < min_sample_size or n_b < min_sample_size:
-        sample_size_warning = f"Small sample size detected (A: {n_a}, B: {n_b}). Results may not be reliable. Consider running with at least {min_sample_size} scenarios."
+        sample_size_warning = f"Small sample size detected (Run 1: {n_a}, Run 2: {n_b}). Results may not be reliable. Consider running with at least {min_sample_size} scenarios."
     
     # Convert to binary success arrays
-    successes_a = [1 if r["success"] else 0 for r in results_a]
-    successes_b = [1 if r["success"] else 0 for r in results_b]
+    successes_a = [1 if r.get("success", False) else 0 for r in results_a]
+    successes_b = [1 if r.get("success", False) else 0 for r in results_b]
     
     # Calculate proportions
     p_a = sum(successes_a) / n_a if n_a > 0 else 0
     p_b = sum(successes_b) / n_b if n_b > 0 else 0
     
-    # Use chi-square test for proportions (more appropriate than t-test for binary data)
-    from scipy.stats import fisher_exact
-    
+    # Use chi-square test for proportions
     contingency_table = [
         [sum(successes_a), n_a - sum(successes_a)],
         [sum(successes_b), n_b - sum(successes_b)]
     ]
     
     # Validate chi-square test assumptions
-    # Expected frequencies should be at least 5 in each cell
     try:
         chi2, p_value_chi2, dof, expected = chi2_contingency(contingency_table)
         
@@ -423,9 +417,8 @@ def _perform_statistical_analysis(results_a: list, results_b: list) -> Dict[str,
             if len(contingency_table) == 2 and len(contingency_table[0]) == 2:
                 oddsratio, p_value = fisher_exact(contingency_table)
                 test_type = "fisher_exact"
-                chi2 = None  # Not applicable for Fisher's exact
+                chi2 = None
             else:
-                # For very small samples, just report descriptive statistics
                 p_value = None
                 test_type = "descriptive_only"
                 chi2 = None
@@ -434,18 +427,16 @@ def _perform_statistical_analysis(results_a: list, results_b: list) -> Dict[str,
             test_type = "chi_square"
             
     except (ValueError, ZeroDivisionError):
-        # Handle edge cases where chi-square test cannot be performed
         p_value = None
         test_type = "insufficient_data"
         chi2 = None
     
     # Calculate effect size (Cohen's h for proportions)
-    # h = 2 * (arcsin(sqrt(p1)) - arcsin(sqrt(p2)))
     h = 2 * (np.arcsin(np.sqrt(p_b)) - np.arcsin(np.sqrt(p_a)))
     
     # Calculate confidence interval for difference in proportions
-    pooled_p = (sum(successes_a) + sum(successes_b)) / (n_a + n_b)
-    se = np.sqrt(pooled_p * (1 - pooled_p) * (1/n_a + 1/n_b))
+    pooled_p = (sum(successes_a) + sum(successes_b)) / (n_a + n_b) if (n_a + n_b) > 0 else 0
+    se = np.sqrt(pooled_p * (1 - pooled_p) * (1/n_a + 1/n_b)) if pooled_p > 0 and pooled_p < 1 else 0
     diff = p_b - p_a
     z_critical = 1.96  # 95% confidence
     ci_lower = diff - z_critical * se
@@ -460,10 +451,10 @@ def _perform_statistical_analysis(results_a: list, results_b: list) -> Dict[str,
     else:
         power = None
     
-    # Determine significance based on available test
+    # Determine significance
     significant = p_value < 0.05 if p_value is not None else None
     
-    # Add additional warnings for statistical validity
+    # Add warnings
     statistical_warnings = []
     if sample_size_warning:
         statistical_warnings.append(sample_size_warning)
@@ -471,9 +462,9 @@ def _perform_statistical_analysis(results_a: list, results_b: list) -> Dict[str,
     if test_type == "fisher_exact":
         statistical_warnings.append("Used Fisher's exact test due to small expected frequencies.")
     elif test_type == "descriptive_only":
-        statistical_warnings.append("Statistical test not performed due to insufficient data. Results are descriptive only.")
+        statistical_warnings.append("Statistical test not performed due to insufficient data.")
     elif test_type == "insufficient_data":
-        statistical_warnings.append("Insufficient data for statistical analysis. Increase sample size.")
+        statistical_warnings.append("Insufficient data for statistical analysis.")
     
     return {
         "p_value": p_value,

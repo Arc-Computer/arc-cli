@@ -13,7 +13,7 @@ from arc.cli.design_standards import (
     COLORS, LAYOUT, SYMBOLS, ASSUMPTION_STYLES, 
     FUNNEL_STYLES, STATISTICAL_STYLES, STREAMING_CONFIG
 )
-from arc.cli.enterprise_messaging import (
+from arc.cli.message_templates import (
     format_percentage, format_currency, format_duration,
     format_confidence_interval, format_p_value
 )

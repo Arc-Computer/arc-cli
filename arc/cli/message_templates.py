@@ -1,7 +1,7 @@
-"""Arc Enterprise CLI Messaging Templates.
+"""Arc CLI Message Templates.
 
-Business-focused messaging that translates technical findings into
-actionable insights with statistical credibility and enterprise polish.
+Professional messaging that translates technical findings into
+actionable insights with statistical credibility and clear communication.
 """
 
 # Assumption violation messages - core to Arc's value proposition

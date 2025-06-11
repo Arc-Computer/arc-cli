@@ -32,7 +32,13 @@ pip install -e .
 
 ## Quick Start
 
-1. **Create an agent configuration file** (`agent.yaml`):
+1. **Enable Modal execution** (recommended for performance):
+
+```bash
+export ARC_USE_DEPLOYED_APP=true  # No authentication needed!
+```
+
+2. **Create an agent configuration file** (`agent.yaml`):
 
 ```yaml
 model: gpt-4.1-mini
@@ -45,7 +51,7 @@ tools:
   - name: currency_converter
 ```
 
-2. **Test your agent**:
+3. **Test your agent**:
 
 ```bash
 # Validate configuration

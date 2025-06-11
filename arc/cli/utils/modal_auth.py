@@ -24,24 +24,29 @@ def setup_modal_auth(
     Returns:
         True if authentication is configured, False otherwise
     """
-    # Method 1: Check if running inside Modal workspace/container
+    # Method 1: Check if using deployed Modal app (no auth needed)
+    if os.environ.get("ARC_USE_DEPLOYED_APP"):
+        console.print("Using deployed Modal app (no authentication required)", style="info")
+        return True
+    
+    # Method 2: Check if running inside Modal workspace/container
     if os.environ.get("MODAL_IDENTITY_TOKEN") or os.environ.get("MODAL_TASK_ID"):
         console.print("Running inside Modal workspace deployment", style="info")
         return True
     
-    # Method 2: Use provided tokens
+    # Method 3: Use provided tokens
     if token_id and token_secret:
         os.environ["MODAL_TOKEN_ID"] = token_id
         os.environ["MODAL_TOKEN_SECRET"] = token_secret
         console.print("Using provided Modal credentials", style="info")
         return True
 
-    # Method 3: Check if already set in environment
+    # Method 4: Check if already set in environment
     if os.environ.get("MODAL_TOKEN_ID") and os.environ.get("MODAL_TOKEN_SECRET"):
         console.print("Using existing Modal environment credentials", style="info")
         return True
 
-    # Method 4: Check for Arc-provided demo tokens
+    # Method 5: Check for Arc-provided demo tokens
     arc_token_id = os.environ.get("ARC_MODAL_TOKEN_ID")
     arc_token_secret = os.environ.get("ARC_MODAL_TOKEN_SECRET")
 
@@ -54,7 +59,7 @@ def setup_modal_auth(
         )
         return True
 
-    # Method 5: Check for user's Modal config
+    # Method 6: Check for user's Modal config
     modal_config_path = Path.home() / ".modal.toml"
     if modal_config_path.exists():
         console.print("Using user's Modal configuration", style="info")

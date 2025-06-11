@@ -11,6 +11,8 @@ import os
 from typing import Dict, List, Any, Optional, Tuple
 from collections import defaultdict
 from dataclasses import dataclass
+from functools import lru_cache
+import hashlib
 import aiohttp
 
 from arc.ingestion.parser import AgentConfigParser
@@ -63,6 +65,9 @@ class FunnelAnalyzer:
         # AI model for enhanced analysis - using fast and powerful GPT-4.1-mini
         self.ai_model = "openai/gpt-4.1-mini"
         
+        # Cache for AI analysis results
+        self._ai_cache = {}
+        
         # Capability mapping from ingestion parser
         self.capability_steps = {
             "input_processing": ["parsing", "validation", "understanding"],
@@ -71,8 +76,21 @@ class FunnelAnalyzer:
             "output_generation": ["formatting", "completeness", "accuracy"],
             "error_handling": ["detection", "recovery", "fallback"],
         }
+    
+    def _get_trajectory_hash(self, trajectory: Dict[str, Any], analysis_type: str) -> str:
+        """Generate a hash key for caching trajectory analysis."""
+        # Create a deterministic hash from key trajectory elements
+        key_elements = {
+            "type": analysis_type,
+            "status": trajectory.get("status"),
+            "task": trajectory.get("scenario", {}).get("task_prompt", "")[:100],
+            "output": str(trajectory.get("final_output", ""))[:100],
+            "event_count": len(trajectory.get("full_trajectory", []))
+        }
+        key_str = json.dumps(key_elements, sort_keys=True)
+        return hashlib.md5(key_str.encode()).hexdigest()
         
-    def build_capability_funnel(self, agent_profile: Dict[str, Any], 
+    async def build_capability_funnel(self, agent_profile: Dict[str, Any], 
                                trajectories: List[Dict[str, Any]]) -> CapabilityFunnel:
         """
         Create step-by-step capability funnel from execution trajectories.
@@ -92,7 +110,7 @@ class FunnelAnalyzer:
         tool_categories = capabilities.get("tool_categories", {})
         
         # Map trajectories to capability steps
-        step_results = self._map_execution_steps_to_capabilities(trajectories, capabilities)
+        step_results = await self._map_execution_steps_to_capabilities(trajectories, capabilities)
         
         # Calculate success rates for each step
         funnel_steps = []
@@ -132,7 +150,7 @@ class FunnelAnalyzer:
             capability_breakdown=capability_breakdown
         )
     
-    def _map_execution_steps_to_capabilities(self, trajectories: List[Dict[str, Any]], 
+    async def _map_execution_steps_to_capabilities(self, trajectories: List[Dict[str, Any]], 
                                            capabilities: Dict[str, Any]) -> Dict[str, List[Dict[str, Any]]]:
         """
         Map trajectory execution events to capability categories.
@@ -165,13 +183,13 @@ class FunnelAnalyzer:
             })
             
             step_results["reasoning"].append({
-                "success": self._evaluate_reasoning(trajectory),
+                "success": await self._evaluate_reasoning(trajectory),
                 "trajectory_id": trajectory.get("id"),
                 "details": trajectory.get("reasoning_details", {})
             })
             
             step_results["output_generation"].append({
-                "success": self._evaluate_output_generation(trajectory),
+                "success": await self._evaluate_output_generation(trajectory),
                 "trajectory_id": trajectory.get("id"),
                 "details": trajectory.get("output_details", {})
             })
@@ -217,7 +235,7 @@ class FunnelAnalyzer:
         
         return True
     
-    def _evaluate_reasoning(self, trajectory: Dict[str, Any]) -> bool:
+    async def _evaluate_reasoning(self, trajectory: Dict[str, Any]) -> bool:
         """Evaluate reasoning and decision-making quality using AI analysis."""
         # Quick heuristic check first
         events = trajectory.get("full_trajectory", [])
@@ -231,7 +249,7 @@ class FunnelAnalyzer:
         # If trajectory failed, analyze with AI for reasoning quality
         if trajectory.get("status") != "success":
             try:
-                return asyncio.run(self._ai_analyze_reasoning(trajectory))
+                return await self._ai_analyze_reasoning(trajectory)
             except Exception as e:
                 logger.warning(f"AI reasoning analysis failed: {e}")
                 return False
@@ -239,7 +257,7 @@ class FunnelAnalyzer:
         # If trajectory completed successfully, assume reasoning was adequate
         return True
     
-    def _evaluate_output_generation(self, trajectory: Dict[str, Any]) -> bool:
+    async def _evaluate_output_generation(self, trajectory: Dict[str, Any]) -> bool:
         """Evaluate output quality and completeness using AI analysis."""
         final_output = trajectory.get("final_output", "")
         
@@ -254,7 +272,7 @@ class FunnelAnalyzer:
         # If trajectory succeeded, do enhanced AI quality analysis
         if trajectory.get("status") == "success":
             try:
-                return asyncio.run(self._ai_analyze_output_quality(trajectory))
+                return await self._ai_analyze_output_quality(trajectory)
             except Exception as e:
                 logger.warning(f"AI output analysis failed: {e}")
                 return True  # Default to success if AI fails
@@ -284,6 +302,43 @@ class FunnelAnalyzer:
         
         # If we reach here, all errors had recovery attempts
         return True
+    
+    def _summarize_trajectory(self, events: List[Dict[str, Any]], max_events: int = 5) -> List[Dict[str, Any]]:
+        """Summarize trajectory to reduce token usage while preserving key information."""
+        if len(events) <= max_events:
+            return events
+        
+        # Prioritize error events and tool calls
+        error_events = [e for e in events if e.get("type") == "error"]
+        tool_events = [e for e in events if e.get("type") == "tool_call"]
+        message_events = [e for e in events if e.get("type") == "message"]
+        
+        # Build summary with most important events
+        summary = []
+        
+        # Always include first and last events for context
+        if events:
+            summary.append(events[0])
+        
+        # Add all errors (most important for analysis)
+        summary.extend(error_events[:2])
+        
+        # Add sample tool calls
+        summary.extend(tool_events[:2])
+        
+        # Fill remaining slots with messages
+        remaining_slots = max_events - len(summary) - 1  # -1 for last event
+        if remaining_slots > 0:
+            summary.extend(message_events[:remaining_slots])
+        
+        # Always include last event
+        if len(events) > 1 and events[-1] not in summary:
+            summary.append(events[-1])
+        
+        # Sort by original order
+        summary.sort(key=lambda e: events.index(e) if e in events else 0)
+        
+        return summary[:max_events]
     
     def _get_tool_execution_details(self, events: List[Dict[str, Any]]) -> Dict[str, Any]:
         """Extract detailed tool execution information."""
@@ -401,29 +456,39 @@ class FunnelAnalyzer:
     
     async def _ai_analyze_reasoning(self, trajectory: Dict[str, Any]) -> bool:
         """Use GPT-4.1-mini to analyze reasoning quality in failed trajectories."""
+        # Check cache first
+        cache_key = self._get_trajectory_hash(trajectory, "reasoning")
+        if cache_key in self._ai_cache:
+            logger.info(f"Using cached reasoning analysis for {cache_key}")
+            return self._ai_cache[cache_key]
+        
         try:
             # Prepare trajectory data for AI analysis
             events = trajectory.get("full_trajectory", [])
+            summarized_events = self._summarize_trajectory(events, max_events=5)
             final_output = trajectory.get("final_output", "")
             task_prompt = trajectory.get("scenario", {}).get("task_prompt", "")
             
-            # Create analysis prompt
+            # Create analysis prompt with few-shot examples
             analysis_prompt = f"""
-            Analyze the reasoning quality in this AI agent execution:
+            Analyze the reasoning quality in this AI agent execution.
+            
+            Examples:
+            Task: "Calculate the total cost of 5 items at $10 each"
+            Events: [error: "TypeError: unsupported operand"], [message: "Retrying with string conversion"]
+            Output: "Unable to complete calculation"
+            Response: {{"reasoning_score": 3, "explanation": "Failed to handle type conversion, no proper error recovery"}}
+            
+            Task: "Find weather for Paris"
+            Events: [tool_call: "weather_api"], [message: "Parsed location"], [tool_output: "22°C, sunny"]
+            Output: "The weather in Paris is 22°C and sunny"
+            Response: {{"reasoning_score": 9, "explanation": "Clear logical flow, correct tool usage, complete output"}}
 
-            TASK: {task_prompt}
-            
-            EXECUTION EVENTS: {json.dumps(events[:5])}
-            
-            FINAL OUTPUT: {final_output}
-            
+            Now analyze:
+            TASK: {task_prompt[:200]}
+            EXECUTION: {json.dumps(summarized_events)}
+            OUTPUT: {final_output[:200]}
             STATUS: {trajectory.get("status", "unknown")}
-
-            Rate the agent's reasoning on a scale of 1-10 considering:
-            1. Logical consistency of steps
-            2. Decision-making quality
-            3. Problem decomposition
-            4. Error recognition
 
             Respond with only a JSON object with reasoning_score (1-10) and explanation fields.
             """
@@ -466,7 +531,10 @@ class FunnelAnalyzer:
                             analysis = json.loads(ai_response)
                             score = analysis.get("reasoning_score", 5)
                             logger.info(f"AI reasoning analysis: score={score}, explanation={analysis.get('explanation', 'N/A')}")
-                            return score >= 7  # Consider good if score is 7 or above
+                            result = score >= 7  # Consider good if score is 7 or above
+                            # Cache the result
+                            self._ai_cache[cache_key] = result
+                            return result
                         except json.JSONDecodeError:
                             logger.warning(f"Failed to parse AI response as JSON: {ai_response}")
                             return False
@@ -481,23 +549,33 @@ class FunnelAnalyzer:
     
     async def _ai_analyze_output_quality(self, trajectory: Dict[str, Any]) -> bool:
         """Use GPT-4.1-mini to analyze output quality and completeness."""
+        # Check cache first
+        cache_key = self._get_trajectory_hash(trajectory, "output_quality")
+        if cache_key in self._ai_cache:
+            logger.info(f"Using cached output quality analysis for {cache_key}")
+            return self._ai_cache[cache_key]
+        
         try:
             final_output = trajectory.get("final_output", "")
             task_prompt = trajectory.get("scenario", {}).get("task_prompt", "")
             
-            # Create quality analysis prompt
+            # Create quality analysis prompt with few-shot examples
             quality_prompt = f"""
-            Evaluate the quality and completeness of this AI agent's output:
-
-            ORIGINAL TASK: {task_prompt}
+            Evaluate AI agent output quality.
             
-            AGENT OUTPUT: {final_output}
+            Example 1:
+            Task: "Convert 100 USD to EUR"
+            Output: "100 USD equals approximately 92 EUR at current exchange rates"
+            Response: {{"quality_score": 9, "explanation": "Complete, accurate, and useful conversion"}}
+            
+            Example 2:
+            Task: "Book a flight from NYC to LAX"
+            Output: "I cannot book flights"
+            Response: {{"quality_score": 2, "explanation": "Incomplete response, no alternative suggestions"}}
 
-            Rate the output quality on a scale of 1-10 considering:
-            1. Completeness - Does it fully address the task?
-            2. Accuracy - Is the information correct?
-            3. Clarity - Is it well-structured and clear?
-            4. Usefulness - Would this help the user?
+            Now evaluate:
+            TASK: {task_prompt[:200]}
+            OUTPUT: {final_output[:300]}
 
             Respond with only a JSON object with quality_score (1-10) and explanation fields.
             """
@@ -542,7 +620,10 @@ class FunnelAnalyzer:
                             analysis = json.loads(ai_response)
                             score = analysis.get("quality_score", 5)
                             logger.info(f"AI output quality analysis: score={score}, explanation={analysis.get('explanation', 'N/A')}")
-                            return score >= 7  # Consider good if score is 7 or above
+                            result = score >= 7  # Consider good if score is 7 or above
+                            # Cache the result
+                            self._ai_cache[cache_key] = result
+                            return result
                         except json.JSONDecodeError:
                             logger.warning(f"Failed to parse AI response as JSON: {ai_response}")
                             return True  # Default to success if parse fails

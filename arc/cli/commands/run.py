@@ -624,7 +624,7 @@ async def _execute_modal_with_streaming(
                 
                 # Progressive funnel analysis (every 10 scenarios)
                 if len(completed_trajectories) % 10 == 0 and len(completed_trajectories) > 0:
-                    funnel = funnel_analyzer.build_capability_funnel(
+                    funnel = await funnel_analyzer.build_capability_funnel(
                         agent_profile, completed_trajectories[-10:]
                     )
                     

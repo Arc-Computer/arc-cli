@@ -11,6 +11,8 @@ import os
 from typing import Dict, List, Any, Optional, Tuple
 from dataclasses import dataclass
 from datetime import datetime
+from functools import lru_cache
+import hashlib
 import aiohttp
 
 from arc.cli.message_templates import ASSUMPTION_MESSAGES
@@ -60,6 +62,9 @@ class AssumptionDetector:
         """
         self.model_provider = model_provider
         self.model_name = self._get_latest_model(model_provider)
+        
+        # Cache for AI detection results
+        self._detection_cache = {}
         
         # Domain-aware patterns from normalizer.py knowledge
         self.domain_patterns = {
@@ -128,6 +133,17 @@ class AssumptionDetector:
             "google": "google/gemini-2.5-flash-preview-05-20"  # Fast and capable
         }
         return latest_models.get(provider, "openai/gpt-4.1-mini")
+    
+    def _get_detection_cache_key(self, trajectory: Dict[str, Any], domains: List[str]) -> str:
+        """Generate cache key for detection results."""
+        key_data = {
+            "status": trajectory.get("status"),
+            "task": trajectory.get("scenario", {}).get("task_prompt", "")[:100],
+            "output": str(trajectory.get("final_output", ""))[:100],
+            "domains": sorted(domains),
+            "event_types": sorted(set(e.get("type", "") for e in trajectory.get("full_trajectory", [])[:10]))
+        }
+        return hashlib.md5(json.dumps(key_data, sort_keys=True).encode()).hexdigest()
     
     async def detect_live_violations(self, trajectory: Dict[str, Any], 
                                    agent_profile: Dict[str, Any]) -> List[AssumptionViolation]:
@@ -318,9 +334,52 @@ class AssumptionDetector:
         
         return False
     
+    def _summarize_events_for_detection(self, events: List[Dict[str, Any]], max_events: int = 7) -> List[Dict[str, Any]]:
+        """Summarize events focusing on assumption-prone patterns."""
+        if len(events) <= max_events:
+            return events
+        
+        # Prioritize events that might contain assumptions
+        critical_events = []
+        
+        # Look for specific patterns
+        for event in events:
+            event_str = json.dumps(event).lower()
+            # Currency/money related
+            if any(term in event_str for term in ["usd", "dollar", "$", "currency", "price", "cost"]):
+                critical_events.append(event)
+            # Time/timezone related
+            elif any(term in event_str for term in ["time", "date", "timezone", "utc", "gmt"]):
+                critical_events.append(event)
+            # Language/encoding
+            elif any(term in event_str for term in ["english", "language", "utf", "encoding"]):
+                critical_events.append(event)
+            # Errors (important for assumption detection)
+            elif event.get("type") == "error":
+                critical_events.append(event)
+        
+        # Take first and last for context
+        summary = []
+        if events:
+            summary.append(events[0])
+        summary.extend(critical_events[:max_events-2])
+        if len(events) > 1:
+            summary.append(events[-1])
+        
+        return summary[:max_events]
+    
     async def _ai_enhanced_detection(self, trajectory: Dict[str, Any], 
                                    agent_profile: Dict[str, Any]) -> List[AssumptionViolation]:
         """Use AI model for enhanced assumption detection."""
+        # Get cache key
+        domains = agent_profile.get("capabilities", {}).get("domains", ["general"])
+        cache_key = self._get_detection_cache_key(trajectory, domains)
+        
+        # Check cache
+        if cache_key in self._detection_cache:
+            logger.info(f"Using cached assumption detection for {cache_key}")
+            return self._detection_cache[cache_key]
+        
         logger.info(f"Running AI-enhanced analysis with {self.model_name}")
         
         api_key = os.environ.get("OPENROUTER_API_KEY")
@@ -333,38 +392,31 @@ class AssumptionDetector:
             scenario = trajectory.get("scenario", {})
             task_prompt = scenario.get("task_prompt", "")
             events = trajectory.get("full_trajectory", [])
+            summarized_events = self._summarize_events_for_detection(events, max_events=7)
             final_output = trajectory.get("final_output", "")
             
             # Get agent capabilities for context
             capabilities = agent_profile.get("capabilities", {})
             domains = capabilities.get("domains", ["general"])
             
-            # Create comprehensive prompt for assumption detection
+            # Create comprehensive prompt with few-shot examples
             detection_prompt = f"""
-            Analyze this failed AI agent execution for hidden assumptions:
-
-            AGENT DOMAINS: {', '.join(domains)}
-            TASK: {task_prompt}
-            EXECUTION EVENTS: {json.dumps(events[:10])}
-            FINAL OUTPUT: {final_output}
+            Analyze AI agent execution for assumption violations.
+            
+            Example violations:
+            1. Currency: Agent processes "$100" assuming USD without checking user location
+            2. Timezone: Agent schedules meeting at "3pm" without clarifying timezone
+            3. Language: Agent responds only in English to non-English query
+            
+            Now analyze:
+            DOMAINS: {', '.join(domains)}
+            TASK: {task_prompt[:200]}
+            EVENTS: {json.dumps(summarized_events)}
+            OUTPUT: {final_output[:200]}
             STATUS: {trajectory.get("status", "error")}
 
-            Identify assumption violations in these categories:
-            1. Currency assumptions (e.g., assuming USD without validation)
-            2. Language/encoding assumptions (e.g., assuming English input)
-            3. Timezone assumptions (e.g., using system time without context)
-            4. Data format assumptions (e.g., expecting specific formats)
-            5. Permission/access assumptions (e.g., assuming file access)
-
-            For each assumption found, provide:
-            - type: currency/language/timezone/format/permission
-            - severity: low/medium/high/critical
-            - description: Brief description of the assumption
-            - minimal_reproduction: How to reproduce this issue
-            - suggested_fix: How to fix this assumption
-            - business_impact: What could go wrong in production
-
-            Respond with a JSON array of assumption violations found. If no clear assumptions, return empty array [].
+            Return JSON array of violations with: type, severity, description, minimal_reproduction, suggested_fix, business_impact.
+            If no assumptions found, return [].
             """
             
             async with aiohttp.ClientSession() as session:
@@ -416,6 +468,8 @@ class AssumptionDetector:
                                 violations.append(violation)
                             
                             logger.info(f"AI detected {len(violations)} assumption violations")
+                            # Cache the results
+                            self._detection_cache[cache_key] = violations
                             return violations
                             
                         except json.JSONDecodeError:

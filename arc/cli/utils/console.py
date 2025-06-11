@@ -7,7 +7,7 @@ from rich.live import Live
 from rich.progress import Progress
 from rich.table import Table
 from rich.panel import Panel
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 
 from arc.cli.design_standards import (
     COLORS, LAYOUT, SYMBOLS, ASSUMPTION_STYLES, 
@@ -44,7 +44,7 @@ class ArcConsole(Console):
     def print_cost(self, label: str, amount: float) -> None:
         """Print cost information."""
         formatted_cost = format_currency(amount)
-        self.print(f"[muted]Cost:[/muted] [info]{formatted_cost}[/info]")
+        self.print(f"[muted]{label}:[/muted] [info]{formatted_cost}[/info]")
     
     def print_progress_update(self, message: str) -> None:
         """Print a progress update message."""

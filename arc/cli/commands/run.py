@@ -14,8 +14,10 @@ from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, TimeRe
 from rich.panel import Panel
 from rich.table import Table
 
-from arc.cli.utils import ArcConsole, CLIState, RunResult, format_error, format_success, format_warning
-from arc.cli.utils import db_manager, HybridState
+from arc.cli.utils import (
+    ArcConsole, CLIState, RunResult, HybridState, db_manager,
+    format_error, format_success, format_warning
+)
 from arc.cli.utils.error_helpers import categorize_error
 from arc.cli.loading_interface import ConfigAnalysisLoader, ExecutionProgressLoader
 from arc.analysis.funnel_analyzer import FunnelAnalyzer

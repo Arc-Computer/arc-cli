@@ -411,7 +411,7 @@ class FunnelAnalyzer:
 
             TASK: {task_prompt}
             
-            EXECUTION EVENTS: {json.dumps(events[:5])}  # First 5 events
+            EXECUTION EVENTS: {json.dumps(events[:5])}
             
             FINAL OUTPUT: {final_output}
             

@@ -295,6 +295,7 @@ def _estimate_cost(scenario_count: int, model: str) -> float:
         # OpenAI
         "openai/gpt-4.1": {"cost_per_1k_in": 0.00200, "cost_per_1k_out": 0.00800},
         "openai/gpt-4.1-mini": {"cost_per_1k_in": 0.00040, "cost_per_1k_out": 0.00160},
+        "openai/o3-pro": {"cost_per_1k_in": 0.02, "cost_per_1k_out": 0.08},
         
         # Anthropic
         "anthropic/claude-opus-4": {"cost_per_1k_in": 0.01500, "cost_per_1k_out": 0.07500},

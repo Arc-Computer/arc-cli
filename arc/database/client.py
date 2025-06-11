@@ -207,16 +207,30 @@ class TimescaleDBHealth:
         """Check connection pool statistics."""
         try:
             pool = self.engine.pool
-            return {
-                "size": pool.size(),
-                "checked_in": pool.checkedin(),
-                "checked_out": pool.checkedout(),
-                "overflow": pool.overflow(),
-                "total": pool.total()
-            }
+            # Handle AsyncAdaptedQueuePool which has different attributes
+            stats = {}
+            
+            # Try to get available attributes
+            if hasattr(pool, 'size'):
+                stats["size"] = pool.size()
+            if hasattr(pool, 'checked_in_connections'):
+                stats["checked_in"] = len(pool._pool.queue) if hasattr(pool._pool, 'queue') else 0
+            else:
+                stats["checked_in"] = getattr(pool, 'checkedin', lambda: 0)()
+            
+            if hasattr(pool, 'checked_out_connections'):
+                stats["checked_out"] = pool.checked_out_connections
+            else:
+                stats["checked_out"] = getattr(pool, 'checkedout', lambda: 0)()
+                
+            # AsyncAdaptedQueuePool doesn't have overflow/total
+            stats["overflow"] = 0
+            stats["total"] = stats.get("checked_in", 0) + stats.get("checked_out", 0)
+            
+            return stats
         except Exception as e:
             logger.error(f"Failed to check connection pool: {e}")
-            return {"error": str(e)}
+            return {"error": str(e), "pool_type": type(pool).__name__ if 'pool' in locals() else "Unknown"}
 
 
 class ArcDBClient:

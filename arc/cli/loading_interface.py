@@ -13,7 +13,7 @@ from rich.panel import Panel
 from rich.table import Table
 
 from arc.cli.design_standards import PROGRESS_STYLES, COLORS, LAYOUT
-from arc.cli.message_templates import COMMAND_MESSAGES
+from arc.cli.message_templates import COMMAND_MESSAGES, format_currency
 
 
 class ConfigAnalysisLoader:
@@ -186,7 +186,7 @@ class ExecutionProgressLoader:
         if "cost" in metrics:
             cost = metrics["cost"]
             estimated = metrics.get("estimated_cost", cost * 1.2)
-            content_lines.append(f"Cost:       ${cost:.4f} (estimated: ${estimated:.4f})")
+            content_lines.append(f"Cost:       {format_currency(cost)} (estimated: {format_currency(estimated)})")
         
         # Time tracking
         if "elapsed_time" in metrics:

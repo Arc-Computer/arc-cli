@@ -4,7 +4,6 @@ from rich.console import Console
 from rich.theme import Theme
 from rich.text import Text
 from rich.live import Live
-from rich.progress import Progress
 from rich.table import Table
 from rich.panel import Panel
 from typing import Any, Dict, List
@@ -14,7 +13,7 @@ from arc.cli.design_standards import (
     FUNNEL_STYLES, STATISTICAL_STYLES, STREAMING_CONFIG
 )
 from arc.cli.message_templates import (
-    format_percentage, format_currency, format_duration,
+    format_percentage, format_currency,
     format_confidence_interval, format_p_value
 )
 
@@ -41,10 +40,10 @@ class ArcConsole(Console):
         """Print a metric with label and value."""
         self.print(f"[muted]{label}:[/muted] [{style}]{value}[/{style}]")
     
-    def print_cost(self, label: str, amount: float) -> None:
+    def print_cost(self, amount: float) -> None:
         """Print cost information."""
         formatted_cost = format_currency(amount)
-        self.print(f"[muted]{label}:[/muted] [info]{formatted_cost}[/info]")
+        self.print(f"[info]{formatted_cost}[/info]")
     
     def print_progress_update(self, message: str) -> None:
         """Print a progress update message."""

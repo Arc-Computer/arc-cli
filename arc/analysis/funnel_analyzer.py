@@ -423,7 +423,7 @@ class FunnelAnalyzer:
             3. Problem decomposition
             4. Error recognition
 
-            Respond with only a JSON object: {{"reasoning_score": <1-10>, "explanation": "<brief explanation>"}}
+            Respond with only a JSON object with reasoning_score (1-10) and explanation fields.
             """
             
             # In a real implementation, this would call the OpenRouter API
@@ -457,7 +457,7 @@ class FunnelAnalyzer:
             3. Clarity - Is it well-structured and clear?
             4. Usefulness - Would this help the user?
 
-            Respond with only a JSON object: {{"quality_score": <1-10>, "explanation": "<brief explanation>"}}
+            Respond with only a JSON object with quality_score (1-10) and explanation fields.
             """
             
             # In a real implementation, this would call the OpenRouter API

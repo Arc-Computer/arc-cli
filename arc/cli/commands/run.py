@@ -134,8 +134,20 @@ def run(config_path: str, scenarios: int, json_output: bool, no_confirm: bool, p
                 "normalizer_enhancements": []
             }
         
-        # Step 2: Estimate costs
-        estimated_cost = _estimate_cost(scenarios, normalized_config["model"])
+        # Create AgentConfig from normalized configuration
+        agent_config = AgentConfig.model_validate(normalized_config)
+        
+        # Step 2: Initialize Modal orchestrator if available
+        use_modal = not no_modal and _check_modal_available()
+        if use_modal:
+            orchestrator = ModalOrchestrator(
+                db_client=db_manager.get_client() if db_available else None,
+                console=console
+            )
+            estimated_cost = orchestrator._estimate_execution_cost(scenarios, agent_config.model)
+        else:
+            orchestrator = None
+            estimated_cost = _estimate_cost(scenarios, normalized_config["model"])
         
         if not json_output and not no_confirm and estimated_cost > state.config.get("cost_warning_threshold", 0.10):
             console.print(format_warning(f"Estimated cost: ${estimated_cost:.4f}"))
@@ -171,11 +183,14 @@ def run(config_path: str, scenarios: int, json_output: bool, no_confirm: bool, p
             console.print_header("Executing scenarios with real-time intelligence")
         
         # Execute with streaming analysis and intelligence
+        start_time = time.time()
         results, execution_time, actual_cost = asyncio.run(
             _execute_with_streaming_analysis(
                 scenarios=generated_scenarios,
                 agent_config=normalized_config,
                 agent_profile=agent_profile,
+                orchestrator=orchestrator,
+                run_id=run_id,
                 json_output=json_output
             )
         )
@@ -183,6 +198,8 @@ def run(config_path: str, scenarios: int, json_output: bool, no_confirm: bool, p
         # Fallback cost estimation if not provided
         if actual_cost == 0.0:
             actual_cost = estimated_cost
+        
+        execution_time = time.time() - start_time
         
         # Step 5: Calculate results
         success_count = sum(1 for r in results if r.get("success"))
@@ -236,7 +253,7 @@ def run(config_path: str, scenarios: int, json_output: bool, no_confirm: bool, p
             # Results table
             table = Table(show_header=False, box=None)
             table.add_column("Metric", style="muted")
-            table.add_column("Value", style="highlight")
+            table.add_column("Value", style="bold green")
             
             table.add_row("Overall Reliability", f"{reliability_score:.1%} ({success_count}/{len(results)} scenarios)")
             
@@ -497,6 +514,8 @@ async def _execute_with_streaming_analysis(
     scenarios: List[Scenario],
     agent_config: Dict[str, Any],
     agent_profile: Dict[str, Any],
+    orchestrator: ModalOrchestrator,
+    run_id: str,
     json_output: bool
 ) -> tuple[List[Dict[str, Any]], float, float]:
     """
@@ -515,16 +534,19 @@ async def _execute_with_streaming_analysis(
     assumption_detector = AssumptionDetector()
     execution_loader = ExecutionProgressLoader(console)
     
-    # Check Modal availability
-    use_modal = state.config.get("use_modal", False) and _check_modal_available()
+    # Check if we should use Modal orchestrator
+    use_modal = orchestrator is not None and _check_modal_available()
     
     if use_modal:
-        # Execute with Modal + streaming analysis
+        # Execute with Modal + streaming analysis (using orchestrator)
         return await _execute_modal_with_streaming(
             scenarios, agent_config, agent_profile,
-            funnel_analyzer, assumption_detector, execution_loader, json_output
+            funnel_analyzer, assumption_detector, execution_loader, 
+            orchestrator, run_id, json_output
         )
     else:
+        if not json_output:
+            console.print("[warning]Modal not available - using simulation mode[/warning]")
         # Execute simulation with streaming analysis
         return await _execute_simulation_with_streaming(
             scenarios, agent_config, agent_profile,
@@ -539,168 +561,126 @@ async def _execute_modal_with_streaming(
     funnel_analyzer: FunnelAnalyzer,
     assumption_detector: AssumptionDetector,
     execution_loader: ExecutionProgressLoader,
+    orchestrator: ModalOrchestrator,
+    run_id: str,
     json_output: bool
 ) -> tuple[List[Dict[str, Any]], float, float]:
-    """Execute Modal scenarios with real-time streaming intelligence."""
-    try:
-        import modal
-        from arc.sandbox.engine.simulator import app as modal_app, evaluate_single_scenario
-    except ImportError as e:
-        raise RuntimeError(f"Modal execution failed: {e}")
-    
+    """Execute Modal scenarios with real-time streaming intelligence using orchestrator."""
     start_time = time.time()
-    results = []
-    total_cost = 0.0
-    completed_trajectories = []
-    
-    # Prepare scenarios for Modal
-    scenario_dicts = []
-    for scenario in scenarios:
-        if hasattr(scenario, 'to_dict'):
-            scenario_dicts.append(scenario.to_dict())
-        else:
-            scenario_dicts.append(scenario)
-    
-    scenario_tuples = [
-        (scenario, agent_config, i) 
-        for i, scenario in enumerate(scenario_dicts)
-    ]
     
     if not json_output:
-        # Initialize live streaming display
-        with console.start_live_session() as live:
-            
-            # Create progress tracking
-            progress = execution_loader.create_execution_progress(len(scenarios))
-            task = progress.add_task("Executing scenarios on Modal...", total=len(scenarios))
-            
-            # Execute in batches with streaming updates
-            batch_size = 10
-            for batch_start in range(0, len(scenario_tuples), batch_size):
-                batch = scenario_tuples[batch_start:batch_start + batch_size]
-                
-                # Execute batch on Modal
-                try:
-                    with modal_app.run():
-                        batch_results = list(evaluate_single_scenario.map(batch))
-                except Exception as e:
-                    console.print(format_warning(f"Modal execution error: {str(e)}"))
-                    # Create error results for failed batch
-                    for scenario_tuple in batch:
-                        results.append({
-                            "scenario_id": f"scenario_{scenario_tuple[2]}",
-                            "success": False,
-                            "execution_time": 0,
-                            "failure_reason": f"Modal execution error: {str(e)}",
-                            "cost": 0
-                        })
-                    progress.update(task, advance=len(batch))
-                    continue
-                
-                # Process batch results with intelligence analysis
-                for result in batch_results:
-                    # Extract Modal result data
-                    processed_result = await _process_modal_result_with_intelligence(
-                        result, assumption_detector, agent_profile
-                    )
-                    results.append(processed_result)
-                    completed_trajectories.append(processed_result.get("trajectory", {}))
-                    total_cost += processed_result.get("cost", 0)
-                    
-                    progress.update(task, advance=1)
-                
-                # Update live metrics every batch
-                live_metrics = {
-                    "completed": len(results),
-                    "total": len(scenarios),
-                    "cost": total_cost,
-                    "estimated_cost": total_cost * (len(scenarios) / len(results)) if results else 0,
-                    "elapsed_time": time.time() - start_time,
-                    "failures": len([r for r in results if not r.get("success", False)])
-                }
-                
-                # Display live metrics panel
-                metrics_panel = execution_loader.display_live_metrics(live_metrics)
-                live.update(metrics_panel)
-                
-                # Progressive funnel analysis (every 10 scenarios)
-                if len(completed_trajectories) % 10 == 0 and len(completed_trajectories) > 0:
-                    funnel = await funnel_analyzer.build_capability_funnel(
-                        agent_profile, completed_trajectories[-10:]
-                    )
-                    
-                    # Display funnel update
-                    funnel_table = console.format_funnel([
-                        {
-                            "name": step.name,
-                            "success_rate": step.success_rate,
-                            "failures": len(step.failures),
-                            "is_bottleneck": step.is_bottleneck,
-                            "impact": "Critical" if step.is_bottleneck else "Normal"
-                        }
-                        for step in funnel.steps
-                    ])
-                    
-                    console.print()
-                    console.print(funnel_table)
-                    console.print()
-                
-                # Real-time assumption violation detection
-                failed_trajectories = [
-                    r.get("trajectory", {}) for r in results[-len(batch):]
-                    if not r.get("success", False)
-                ]
-                
-                if failed_trajectories:
-                    violations = []
-                    for trajectory in failed_trajectories:
-                        trajectory_violations = await assumption_detector.detect_live_violations(
-                            trajectory, agent_profile
-                        )
-                        violations.extend(trajectory_violations)
-                    
-                    if violations:
-                        violations_panel = execution_loader.display_assumption_alerts([
-                            {
-                                "type": v.type,
-                                "severity": v.severity,
-                                "description": v.description
-                            }
-                            for v in violations[:3]  # Top 3 violations
-                        ])
-                        if violations_panel:
-                            console.print()
-                            console.print(violations_panel)
-                            console.print()
-                
-                # Short delay for visual feedback
-                await asyncio.sleep(0.1)
-    else:
-        # JSON mode: execute without visual feedback
-        try:
-            with modal_app.run():
-                modal_results = list(evaluate_single_scenario.map(scenario_tuples))
-        except Exception as e:
-            # Return error results for all scenarios
-            for i, scenario_tuple in enumerate(scenario_tuples):
-                results.append({
-                    "scenario_id": f"scenario_{i}",
-                    "success": False,
-                    "execution_time": 0,
-                    "failure_reason": f"Modal execution error: {str(e)}",
-                    "cost": 0
-                })
-            execution_time = time.time() - start_time
-            return results, execution_time, 0.0
-        
-        for result in modal_results:
-            processed_result = await _process_modal_result_with_intelligence(
-                result, assumption_detector, agent_profile
-            )
-            results.append(processed_result)
-            total_cost += processed_result.get("cost", 0)
+        console.print("[bold blue]🚀 Initializing Modal Orchestrator[/bold blue]")
+        console.print()
     
-    execution_time = time.time() - start_time
+    try:
+        # Convert agent_config dict to AgentConfig object if needed
+        if isinstance(agent_config, dict):
+            agent_config_obj = AgentConfig.model_validate(agent_config)
+        else:
+            agent_config_obj = agent_config
+        
+        # Use the orchestrator with real-time progress display
+        results = []
+        total_cost = 0.0
+        completed_trajectories = []
+        
+        async for progress_update in orchestrator.execute_with_persistence(
+            agent_config=agent_config_obj,
+            scenarios=scenarios,
+            run_id=run_id
+        ):
+            if not json_output:
+                # Display real-time progress as specified in PR description
+                progress_bar = "█" * int(progress_update.progress_pct * 20) + "░" * (20 - int(progress_update.progress_pct * 20))
+                
+                console.print(f"\r[bold green]Progress:[/bold green] [{progress_bar}] " +
+                            f"{progress_update.completed}/{progress_update.total} scenarios " +
+                            f"| [bold blue]Active Containers:[/bold blue] {progress_update.active_containers} " +
+                            f"| [bold yellow]Cost:[/bold yellow] ${progress_update.current_cost:.4f} " +
+                            f"| {progress_update.status_message}", end="")
+            
+            # Process results as they come in
+            if progress_update.latest_result:
+                # Add intelligence analysis
+                result = await _process_modal_result_with_intelligence(
+                    modal_result=progress_update.latest_result,
+                    assumption_detector=assumption_detector,
+                    agent_profile=agent_profile
+                )
+                results.append(result)
+                
+                if result.get("trajectory"):
+                    completed_trajectories.append(result["trajectory"])
+                
+                total_cost = progress_update.current_cost
+        
+        if not json_output:
+            console.print()  # New line after progress
+            console.print(f"[bold green]✅ Execution completed![/bold green] Final cost: ${total_cost:.4f}")
+            console.print()
+        
+        execution_time = time.time() - start_time
+        
+    except Exception as e:
+        if not json_output:
+            console.print()  # New line
+            console.print(f"[bold red]❌ Orchestrator failed:[/bold red] {str(e)}")
+            console.print("[bold yellow]⚡ Falling back to direct Modal execution...[/bold yellow]")
+        
+        # Fall back to the working Modal execution
+        results, execution_time, total_cost = _execute_with_modal(
+            scenarios=scenarios,
+            agent_config=agent_config,
+            json_output=json_output
+        )
+        
+        # Add intelligence analysis to the results
+        completed_trajectories = []
+        for result in results:
+            if not result.get("success") and result.get("trajectory"):
+                trajectory = result.get("trajectory", {})
+                try:
+                    violations = await assumption_detector.detect_live_violations(trajectory, agent_profile)
+                    result["assumptions_detected"] = [
+                        {
+                            "type": v.type,
+                            "severity": v.severity,
+                            "confidence": v.confidence,
+                            "description": v.description,
+                            "suggested_fix": v.suggested_fix,
+                            "business_impact": v.business_impact
+                        }
+                        for v in violations
+                    ]
+                except Exception:
+                    pass  # Continue if assumption detection fails
+                
+                completed_trajectories.append(trajectory)
+    
+    # Post-execution funnel analysis (only for non-JSON mode)
+    if completed_trajectories and not json_output:
+        try:
+            funnel = await funnel_analyzer.build_capability_funnel(agent_profile, completed_trajectories)
+            
+            # Display final funnel analysis
+            funnel_table = console.format_funnel([
+                {
+                    "name": step.name,
+                    "success_rate": step.success_rate,
+                    "failures": len(step.failures),
+                    "is_bottleneck": step.is_bottleneck,
+                    "impact": "Critical" if step.is_bottleneck else "Normal"
+                }
+                for step in funnel.steps
+            ])
+            
+            console.print()
+            console.print(funnel_table)
+            console.print()
+            
+        except Exception as e:
+            console.print(f"[bold yellow]Warning:[/bold yellow] Could not perform funnel analysis: {e}")
+    
     return results, execution_time, total_cost
 
 

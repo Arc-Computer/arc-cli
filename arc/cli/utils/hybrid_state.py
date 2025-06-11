@@ -141,21 +141,9 @@ class HybridState(CLIState):
         # First save to files synchronously
         run_dir = super().save_run(result)
 
-        # Then try to save to database if available
+        # Database persistence is now handled by ModalOrchestrator
+        # No need to create event loops here to avoid conflicts
         if self.db_connected:
-            try:
-                # Create a new event loop for the database operation
-                loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(loop)
-                try:
-                    loop.run_until_complete(self._save_to_database(result))
-                finally:
-                    loop.close()
-                    asyncio.set_event_loop(None)
-            except Exception as e:
-                console.print(
-                    f"Warning: Database save failed: {str(e)}. Data saved to files only.",
-                    style="warning",
-                )
+            console.print("[info]Database persistence handled by orchestrator[/info]")
 
         return run_dir

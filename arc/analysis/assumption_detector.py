@@ -15,9 +15,21 @@ from functools import lru_cache
 import hashlib
 import aiohttp
 
-from arc.cli.message_templates import ASSUMPTION_MESSAGES
-
 logger = logging.getLogger(__name__)
+
+# Define assumption messages inline to avoid circular import
+ASSUMPTION_MESSAGES = {
+    'currency': "ASSUMPTION VIOLATED: Agent assumes {default_currency} for all transactions",
+    'language': "ASSUMPTION VIOLATED: Agent only handles {default_language} input", 
+    'timezone': "ASSUMPTION VIOLATED: Agent uses {default_timezone} without validation",
+    'encoding': "ASSUMPTION VIOLATED: Agent expects {default_encoding} text encoding",
+    'format': "ASSUMPTION VIOLATED: Agent assumes {default_format} data format",
+    'precision': "ASSUMPTION VIOLATED: Agent uses {default_precision} decimal precision",
+    'scale': "ASSUMPTION VIOLATED: Agent assumes {default_scale} data ranges",
+    'authentication': "ASSUMPTION VIOLATED: Agent bypasses {auth_type} authentication",
+    'validation': "ASSUMPTION VIOLATED: Agent skips input validation for {input_type}",
+    'error_handling': "ASSUMPTION VIOLATED: Agent fails gracefully without proper error handling",
+}
 
 
 @dataclass

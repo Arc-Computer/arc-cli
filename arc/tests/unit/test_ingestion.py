@@ -27,7 +27,7 @@ class TestAgentConfigParser:
     def test_parse_minimal_config(self):
         """Test parsing minimal valid configuration."""
         config = {
-            "model": "gpt-4",
+            "model": "gpt-4.1",
             "temperature": 0.7,
             "system_prompt": "You are a helpful assistant",
             "tools": ["web_search", "calculator"]
@@ -36,7 +36,7 @@ class TestAgentConfigParser:
         
         result = self.parser.parse(config_path)
         
-        assert result["model"] == "gpt-4"
+        assert result["model"] == "gpt-4.1"
         assert result["temperature"] == 0.7
         assert result["system_prompt"] == "You are a helpful assistant"
         assert result["tools"] == ["web_search", "calculator"]
@@ -61,7 +61,7 @@ class TestAgentConfigParser:
     def test_parse_tools_as_dicts(self):
         """Test parsing tools defined as dictionaries."""
         config = {
-            "model": "gpt-4",
+            "model": "gpt-4.1",
             "temperature": 0.7,
             "system_prompt": "Assistant",
             "tools": [
@@ -79,7 +79,7 @@ class TestAgentConfigParser:
     def test_missing_required_fields(self):
         """Test that missing required fields raise appropriate errors."""
         config = {
-            "model": "gpt-4",
+            "model": "gpt-4.1",
             "temperature": 0.7
             # Missing system_prompt and tools
         }
@@ -95,7 +95,7 @@ class TestAgentConfigParser:
     def test_extract_capabilities(self):
         """Test capability extraction from configuration."""
         config = {
-            "model": "gpt-4",
+            "model": "gpt-4.1",
             "temperature": 0.2,
             "system_prompt": "You are a financial analyst specializing in currency trading",
             "tools": ["currency_converter", "market_data_api", "calculate_roi"],
@@ -127,7 +127,7 @@ class TestAgentConfigParser:
     def test_temperature_validation_warning(self):
         """Test that unusual temperature values generate warnings."""
         config = {
-            "model": "gpt-4",
+            "model": "gpt-4.1",
             "temperature": 2.5,  # Outside typical range
             "system_prompt": "Assistant",
             "tools": ["search"]
@@ -150,11 +150,11 @@ class TestConfigNormalizer:
     
     def test_normalize_model_names(self):
         """Test model name normalization."""
-        config = {"model": "gpt-4-turbo"}
+        config = {"model": "gpt-4.1"}
         result = self.normalizer.normalize(config)
         assert result["model"] == "openai/gpt-4.1"
         
-        config = {"model": "claude-3.5-sonnet"}
+        config = {"model": "claude-3.5-haiku"}
         result = self.normalizer.normalize(config)
         assert result["model"] == "anthropic/claude-sonnet-4"
     
@@ -186,7 +186,7 @@ class TestConfigNormalizer:
     
     def test_add_arc_metadata(self):
         """Test Arc metadata addition."""
-        config = {"model": "gpt-4"}
+        config = {"model": "gpt-4.1"}
         result = self.normalizer.normalize(config)
         
         assert "arc_metadata" in result
@@ -257,7 +257,7 @@ class TestConfigNormalizer:
         """Test validation of normalized configurations."""
         # Valid config
         valid_config = {
-            "model": "gpt-4",
+            "model": "gpt-4.1",
             "temperature": 0.7,
             "system_prompt": "Assistant",
             "tools": ["search"],

@@ -325,7 +325,7 @@ class TestArcDBClient:
         version_id = await client.create_configuration(
             name="test_config",
             user_id="test_user",
-            initial_config={"model": "gpt-4", "temperature": 0.7}
+            initial_config={"model": "gpt-4.1", "temperature": 0.7}
         )
         
         # Verify UUID format

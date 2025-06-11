@@ -655,7 +655,7 @@ BEGIN
         total_outcomes_analyzed, session_status
     ) VALUES (
         uuid_generate_v4(), user_id_param, NOW(), NOW(),
-        NOW() - analysis_window, NOW(), 'gpt-4-turbo',
+        NOW() - analysis_window, NOW(), 'gpt-4.1',
         0, 'running'
     ) RETURNING llm_recommendation_sessions.session_id INTO session_id;
     

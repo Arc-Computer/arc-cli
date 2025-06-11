@@ -88,7 +88,7 @@ class TimescaleDBTester:
                 name="test_gpt4_config",
                 user_id=test_user_id,
                 initial_config={
-                    "model": "gpt-4",
+                    "model": "gpt-4.1",
                     "temperature": 0.2,
                     "max_tokens": 2000,
                     "tools": ["web_search", "code_execution"]
@@ -337,7 +337,7 @@ class TimescaleDBTester:
                         name="modal_test_config",
                         user_id=test_user_id,
                         initial_config={
-                            "model": "gpt-4",
+                            "model": "gpt-4.1",
                             "temperature": 0.3,
                             "max_tokens": 1000,
                             "tools": ["modal_test"]

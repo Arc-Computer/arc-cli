@@ -12,7 +12,7 @@ The uncomfortable truth about AI development tools is that the top 1% and bottom
 
 **The 99% (Simple AI Applications)**:
 - Single-purpose tools (chatbots, classifiers)
-- Cloud API calls to GPT-4
+- Cloud API calls to GPT-4.1
 - Basic prompt engineering
 - Simple pass/fail testing
 - Cost optimization focus

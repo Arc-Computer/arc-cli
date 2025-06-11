@@ -199,7 +199,7 @@ class ReliabilityDimension(Enum):
 ```
 
 **Judge Implementation**:
-- Calibrated LLM ensemble (GPT-4-mini for efficiency)
+- Calibrated LLM ensemble (GPT-4.1-mini for efficiency)
 - Chain-of-thought reasoning
 - Root cause attribution
 - Minimal reproduction generation
@@ -347,7 +347,7 @@ arc-eval run --config configs/weather_agent_v2.yaml
 
 ### 7.1 Technical Risks
 - **Knowledge Chunk Explosion**: Start minimal, add incrementally
-- **Judge Quality**: Use proven GPT-4-mini with calibration
+- **Judge Quality**: Use proven GPT-4.1-mini with calibration
 - **Performance**: PostgreSQL proven at scale in experiments
 
 ### 7.2 Competitive Risks

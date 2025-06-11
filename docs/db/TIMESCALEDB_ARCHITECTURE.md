@@ -269,7 +269,7 @@ CREATE TABLE simulations_scenarios (
 │                 │                   │                           │
 │  Agent Config   │   Scenario List   │    Results Collection     │
 │  ┌─────────┐   │   ┌─────────────┐  │   ┌─────────────────────┐ │
-│  │ GPT-4   │   │   │ weather_1   │  │   │ success: 0.95       │ │
+│  │ GPT-4.1 │   │   │ weather_1   │  │   │ success: 0.95       │ │
 │  │ temp:0.7│   │   │ database_2  │  │   │ tokens: 1,245       │ │
 │  │ tools[] │   │   │ api_call_3  │  │   │ cost: $0.045        │ │
 │  └─────────┘   │   └─────────────┘  │   └─────────────────────┘ │
@@ -284,13 +284,13 @@ CREATE TABLE simulations_scenarios (
          │
          ▼
 ┌─────────────────────────────────────────────────────────────────┐
-│                     TIMESCALEDB CLOUD                          │
+│                     TIMESCALEDB CLOUD                           │
 ├─────────────────┬───────────────────┬───────────────────────────┤
 │  Configurations │    Simulations    │      Outcomes             │
 │                 │                   │     (Hypertable)          │
-│  Version: v1.2  │  Status: Running  │  Time: 2024-01-15 14:30  │
-│  Model: GPT-4   │  Progress: 75%    │  Score: 0.87             │
-│  Temp: 0.7      │  Cost: $2.34      │  Tokens: 1,245           │
+│  Version: v1.2  │  Status: Running  │  Time: 2024-01-15 14:30   │
+│  Model: GPT-4.1 │  Progress: 75%    │  Score: 0.87              │
+│  Temp: 0.7      │  Cost: $2.34      │  Tokens: 1,245            │
 └─────────────────┴───────────────────┴───────────────────────────┘
 ```
 

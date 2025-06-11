@@ -79,7 +79,7 @@ python test_complete_pipeline.py
 ✅ Database API created
 ✅ Modal authentication verified
 📄 Loading config: examples/configs/minimal_agent.yaml
-✅ Config normalized: gpt-4
+✅ Config normalized: gpt-4.1
 📝 Generating scenarios...
 ✅ Generated 2 scenarios
 🔥 Executing scenarios with Modal...

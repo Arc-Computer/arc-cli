@@ -43,7 +43,7 @@ class ArcConsole(Console):
     def print_cost(self, amount: float) -> None:
         """Print cost information."""
         formatted_cost = format_currency(amount)
-        self.print(f"[info]{formatted_cost}[/info]")
+        self.print(f"[info]Cost: {formatted_cost}[/info]")
     
     def print_progress_update(self, message: str) -> None:
         """Print a progress update message."""

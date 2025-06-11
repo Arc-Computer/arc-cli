@@ -129,7 +129,11 @@ class ToolBehaviorEngine:
             if isinstance(param, dict):
                 # Format: {"param_name": "description"}
                 for name, desc in param.items():
-                    fields[name] = (str, Field(description=desc))
+                    # Check if description indicates it's optional
+                    if "optional" in str(desc).lower():
+                        fields[name] = (Optional[str], Field(default=None, description=desc))
+                    else:
+                        fields[name] = (str, Field(description=desc))
             elif isinstance(param, str):
                 # Simple string parameter name
                 fields[param] = (str, Field(description=f"Parameter: {param}"))
@@ -191,6 +195,10 @@ class ToolBehaviorEngine:
         This is where the magic happens - we generate appropriate responses
         based on the tool's purpose without hardcoding specific behaviors.
         """
+        # Add sensible defaults for common missing parameters
+        if tool_name == "spreadsheet_analyzer" and "sheet_name" not in inputs:
+            inputs["sheet_name"] = "Sheet1"  # Excel default
+        
         # Track call
         self.call_count[tool_name] = self.call_count.get(tool_name, 0) + 1
         call_info = {

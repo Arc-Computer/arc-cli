@@ -147,7 +147,7 @@ class HybridState(CLIState):
             try:
                 # Check if an event loop is already running
                 try:
-                    loop = asyncio.get_running_loop()
+                    asyncio.get_running_loop()
                     # We're in an async context, use ensure_future for fire-and-forget
                     # This avoids blocking the current operation
                     future = asyncio.ensure_future(self._save_to_database(result))
@@ -157,7 +157,7 @@ class HybridState(CLIState):
                     # No event loop running - we're in a sync context
                     # Create a new event loop in a thread to avoid blocking
                     import threading
-                    
+
                     def run_async_save():
                         try:
                             # Create a new event loop for this thread
@@ -170,7 +170,7 @@ class HybridState(CLIState):
                                 f"Warning: Background database save failed: {str(e)}. Data saved to files only.",
                                 style="warning",
                             )
-                    
+
                     # Run in a background thread to avoid blocking
                     thread = threading.Thread(target=run_async_save, daemon=True)
                     thread.start()
@@ -181,7 +181,7 @@ class HybridState(CLIState):
                 )
 
         return run_dir
-    
+
     def _handle_db_save_error(self, task: asyncio.Task) -> None:
         """Handle errors from async database save task."""
         try:

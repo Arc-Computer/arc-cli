@@ -2,24 +2,25 @@
 
 import os
 from pathlib import Path
-from typing import Optional, Tuple
 
 from arc.cli.utils.console import ArcConsole
 
 console = ArcConsole()
 
 
-def setup_modal_auth(token_id: Optional[str] = None, token_secret: Optional[str] = None) -> bool:
+def setup_modal_auth(
+    token_id: str | None = None, token_secret: str | None = None
+) -> bool:
     """
     Setup Modal authentication with various methods.
-    
+
     Priority order:
     1. Provided tokens (for shared/demo accounts)
     2. Environment variables (MODAL_TOKEN_ID, MODAL_TOKEN_SECRET)
     3. Arc-provided demo tokens (ARC_MODAL_TOKEN_ID, ARC_MODAL_TOKEN_SECRET)
     4. User's own Modal config (~/.modal.toml)
     5. Modal workspace deployment (MODAL_WORKSPACE env var)
-    
+
     Returns:
         True if authentication is configured, False otherwise
     """
@@ -29,32 +30,31 @@ def setup_modal_auth(token_id: Optional[str] = None, token_secret: Optional[str]
         os.environ["MODAL_TOKEN_SECRET"] = token_secret
         console.print("Using provided Modal credentials", style="info")
         return True
-    
+
     # Method 2: Check if already set in environment
     if os.environ.get("MODAL_TOKEN_ID") and os.environ.get("MODAL_TOKEN_SECRET"):
         console.print("Using existing Modal environment credentials", style="info")
         return True
-    
+
     # Method 3: Check for Arc-provided demo tokens
     arc_token_id = os.environ.get("ARC_MODAL_TOKEN_ID")
     arc_token_secret = os.environ.get("ARC_MODAL_TOKEN_SECRET")
-    
+
     if arc_token_id and arc_token_secret:
         os.environ["MODAL_TOKEN_ID"] = arc_token_id
         os.environ["MODAL_TOKEN_SECRET"] = arc_token_secret
         console.print("Using Arc demo Modal credentials", style="info")
         console.print(
-            "Note: These are shared demo credentials with usage limits", 
-            style="warning"
+            "Note: These are shared demo credentials with usage limits", style="warning"
         )
         return True
-    
+
     # Method 4: Check for user's Modal config
     modal_config_path = Path.home() / ".modal.toml"
     if modal_config_path.exists():
         console.print("Using user's Modal configuration", style="info")
         return True
-    
+
     # No authentication found
     return False
 
@@ -82,10 +82,10 @@ For more information: https://modal.com/docs/guide/secrets
 """
 
 
-def check_modal_quota() -> Tuple[bool, Optional[str]]:
+def check_modal_quota() -> tuple[bool, str | None]:
     """
     Check if using shared Modal account and warn about quotas.
-    
+
     Returns:
         (is_shared_account, warning_message)
     """

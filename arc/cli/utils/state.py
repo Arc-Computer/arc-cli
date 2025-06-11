@@ -96,8 +96,8 @@ class CLIState:
                 pass  # Already removed or permission issue
 
     @contextmanager
-    def _file_lock(self, timeout: float = 30.0):
-        """Acquire file lock for concurrent access protection."""
+    def _file_lock(self, timeout: float = 5.0):
+        """Acquire file lock for concurrent access protection with shorter timeout."""
         lock_acquired = False
         start_time = time.time()
 
@@ -121,16 +121,27 @@ class CLIState:
                 except OSError:
                     elapsed = time.time() - start_time
                     if elapsed > timeout:
-                        # Provide helpful error message with suggestions
-                        raise RuntimeError(
-                            f"Could not acquire file lock after {timeout:.1f}s. "
-                            f"This may indicate:\n"
-                            f"  • Another Arc process is running\n"
-                            f"  • A previous process crashed and left a stale lock\n"
-                            f"  • Try: rm {self.lock_file} to force cleanup\n"
-                            f"  • Or wait for the current operation to complete"
-                        ) from None
-                    time.sleep(0.2)  # Less aggressive polling
+                        # Force cleanup of stale lock after timeout
+                        try:
+                            self.lock_file.unlink()
+                            # Try one more time after cleanup
+                            fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                            lock_fd.seek(0)
+                            lock_fd.truncate()
+                            lock_fd.write(f"{os.getpid()}\n{int(time.time())}\n")
+                            lock_fd.flush()
+                            lock_acquired = True
+                            break
+                        except Exception:
+                            raise RuntimeError(
+                                f"Could not acquire file lock after {timeout:.1f}s. "
+                                f"This may indicate:\n"
+                                f"  • Another Arc process is running\n"
+                                f"  • A previous process crashed and left a stale lock\n"
+                                f"  • Try: rm {self.lock_file} to force cleanup\n"
+                                f"  • Or wait for the current operation to complete"
+                            ) from None
+                    time.sleep(0.1)  # More aggressive polling
             
             try:
                 yield
@@ -215,7 +226,7 @@ class CLIState:
                 json.dump(self.config, f, indent=2)
     
     def save_run(self, result: RunResult) -> Path:
-        """Save run results.
+        """Save run results with optimized locking.
         
         Args:
             result: Run result to save
@@ -223,28 +234,41 @@ class CLIState:
         Returns:
             Path to saved run directory
         """
-        with self._file_lock():
-            # Create run directory
-            run_dir = self.runs_dir / result.run_id
-            run_dir.mkdir(exist_ok=True)
-            
+        # Create run directory outside of lock
+        run_dir = self.runs_dir / result.run_id
+        run_dir.mkdir(exist_ok=True)
+        
+        # Prepare data outside of lock
+        result_data = result.to_dict()
+        scenarios_data = result.scenarios
+        results_data = result.results
+        
+        # Save files independently without holding lock
+        try:
             # Save run metadata
             with open(run_dir / "result.json", 'w') as f:
-                json.dump(result.to_dict(), f, indent=2)
+                json.dump(result_data, f, indent=2)
             
             # Save scenarios
             with open(run_dir / "scenarios.json", 'w') as f:
-                json.dump(result.scenarios, f, indent=2)
+                json.dump(scenarios_data, f, indent=2)
             
             # Save results
             with open(run_dir / "results.json", 'w') as f:
-                json.dump(result.results, f, indent=2)
+                json.dump(results_data, f, indent=2)
             
-            # Update last run
-            self.config["last_run_id"] = result.run_id
-            self._save_config()
+            # Only hold lock for config update
+            with self._file_lock(timeout=2.0):
+                self.config["last_run_id"] = result.run_id
+                with open(self.config_file, 'w') as f:
+                    json.dump(self.config, f, indent=2)
+                    
+        except Exception as e:
+            # Log but don't fail completely
+            print(f"Warning: Error saving run data: {e}")
+            # Still return the directory even if some saves failed
             
-            return run_dir
+        return run_dir
     
     def get_run(self, run_id: Optional[str] = None) -> Optional[RunResult]:
         """Get run results by ID or last run.

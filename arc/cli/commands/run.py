@@ -233,7 +233,7 @@ def run(config_path: str, scenarios: int, json_output: bool, no_confirm: bool, p
             # Results table
             table = Table(show_header=False, box=None)
             table.add_column("Metric", style="muted")
-            table.add_column("Value", style="highlight")
+            table.add_column("Value", style="bright_cyan")
             
             table.add_row("Overall Reliability", f"{reliability_score:.1%} ({success_count}/{len(results)} scenarios)")
             

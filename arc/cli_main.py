@@ -17,6 +17,8 @@ from rich.panel import Panel
 from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, TimeRemainingColumn
 from rich.table import Table
 from rich.text import Text
+from dotenv import load_dotenv
+load_dotenv(override=True)
 
 from arc.cli.commands import run, analyze, recommend, diff, validate, status
 from arc.cli.utils import ArcConsole, format_error, format_success

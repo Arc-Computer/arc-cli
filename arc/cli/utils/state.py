@@ -1,14 +1,10 @@
 """CLI state management for storing runs and analysis results."""
 
 import json
-import os
-import fcntl
-import time
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional, Any
 from dataclasses import dataclass, asdict, field
-from contextlib import contextmanager
 
 
 @dataclass
@@ -60,9 +56,6 @@ class CLIState:
         self.runs_dir = self.state_dir / "runs"
         self.config_file = self.state_dir / "config.json"
         
-        # Lock file for concurrent access protection
-        self.lock_file = self.state_dir / ".lock"
-        
         # Create directories if they don't exist
         self.state_dir.mkdir(exist_ok=True)
         self.runs_dir.mkdir(exist_ok=True)
@@ -70,78 +63,7 @@ class CLIState:
         # Load or initialize config
         self.config = self._load_config()
     
-    def _cleanup_stale_lock(self, max_age_seconds: int = 300):
-        """Clean up stale lock files older than max_age_seconds."""
-        if not self.lock_file.exists():
-            return
 
-        try:
-            with open(self.lock_file, 'r') as f:
-                lines = f.read().strip().split('\n')
-                if len(lines) >= 2:
-                    # Check if lock is older than max_age
-                    lock_timestamp = int(lines[1])
-                    if time.time() - lock_timestamp > max_age_seconds:
-                        self.lock_file.unlink()
-                        return
-                else:
-                    # Malformed lock file, remove it
-                    self.lock_file.unlink()
-                    return
-        except (OSError, ValueError, IndexError):
-            # Lock file is corrupted or unreadable, remove it
-            try:
-                self.lock_file.unlink()
-            except OSError:
-                pass  # Already removed or permission issue
-
-    @contextmanager
-    def _file_lock(self, timeout: float = 30.0):
-        """Acquire file lock for concurrent access protection."""
-        lock_acquired = False
-        start_time = time.time()
-
-        # Create lock file if it doesn't exist
-        self.lock_file.touch(exist_ok=True)
-
-        # Check for and clean up stale locks
-        self._cleanup_stale_lock()
-
-        with open(self.lock_file, 'a+') as lock_fd:
-            while True:
-                try:
-                    fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-                    # Write PID/timestamp after acquiring lock
-                    lock_fd.seek(0)
-                    lock_fd.truncate()
-                    lock_fd.write(f"{os.getpid()}\n{int(time.time())}\n")
-                    lock_fd.flush()
-                    lock_acquired = True
-                    break
-                except OSError:
-                    elapsed = time.time() - start_time
-                    if elapsed > timeout:
-                        # Provide helpful error message with suggestions
-                        raise RuntimeError(
-                            f"Could not acquire file lock after {timeout:.1f}s. "
-                            f"This may indicate:\n"
-                            f"  • Another Arc process is running\n"
-                            f"  • A previous process crashed and left a stale lock\n"
-                            f"  • Try: rm {self.lock_file} to force cleanup\n"
-                            f"  • Or wait for the current operation to complete"
-                        ) from None
-                    time.sleep(0.2)  # Less aggressive polling
-            
-            try:
-                yield
-            finally:
-                if lock_acquired:
-                    fcntl.flock(lock_fd, fcntl.LOCK_UN)
-                    # Remove lock file after releasing lock
-                    try:
-                        self.lock_file.unlink()
-                    except OSError:
-                        pass  # File already removed or permission issue
     
     def _validate_config(self, config: Dict[str, Any]) -> Dict[str, Any]:
         """Validate and sanitize configuration."""
@@ -198,21 +120,29 @@ class CLIState:
     def _load_config(self) -> Dict[str, Any]:
         """Load CLI configuration."""
         if self.config_file.exists():
-            with self._file_lock():
-                try:
-                    with open(self.config_file, 'r') as f:
-                        raw_config = json.load(f)
-                    return self._validate_config(raw_config)
-                except (json.JSONDecodeError, KeyError, TypeError):
-                    # Config file is corrupted, return defaults
-                    return self._validate_config({})
+            try:
+                with open(self.config_file, 'r') as f:
+                    raw_config = json.load(f)
+                return self._validate_config(raw_config)
+            except (json.JSONDecodeError, KeyError, TypeError, OSError):
+                # Config file is corrupted or unreadable, return defaults
+                return self._validate_config({})
         return self._validate_config({})
     
     def _save_config(self) -> None:
-        """Save CLI configuration."""
-        with self._file_lock():
-            with open(self.config_file, 'w') as f:
+        """Save CLI configuration using atomic write."""
+        # Use atomic write to prevent corruption
+        temp_file = self.config_file.with_suffix('.tmp')
+        try:
+            with open(temp_file, 'w') as f:
                 json.dump(self.config, f, indent=2)
+            # Atomic move (rename is atomic on most filesystems)
+            temp_file.replace(self.config_file)
+        except OSError:
+            # Clean up temp file on error
+            if temp_file.exists():
+                temp_file.unlink()
+            raise
     
     def save_run(self, result: RunResult) -> Path:
         """Save run results.
@@ -223,28 +153,27 @@ class CLIState:
         Returns:
             Path to saved run directory
         """
-        with self._file_lock():
-            # Create run directory
-            run_dir = self.runs_dir / result.run_id
-            run_dir.mkdir(exist_ok=True)
-            
-            # Save run metadata
-            with open(run_dir / "result.json", 'w') as f:
-                json.dump(result.to_dict(), f, indent=2)
-            
-            # Save scenarios
-            with open(run_dir / "scenarios.json", 'w') as f:
-                json.dump(result.scenarios, f, indent=2)
-            
-            # Save results
-            with open(run_dir / "results.json", 'w') as f:
-                json.dump(result.results, f, indent=2)
-            
-            # Update last run
-            self.config["last_run_id"] = result.run_id
-            self._save_config()
-            
-            return run_dir
+        # Create run directory (unique per run, no locking needed)
+        run_dir = self.runs_dir / result.run_id
+        run_dir.mkdir(exist_ok=True)
+        
+        # Save run metadata
+        with open(run_dir / "result.json", 'w') as f:
+            json.dump(result.to_dict(), f, indent=2)
+        
+        # Save scenarios
+        with open(run_dir / "scenarios.json", 'w') as f:
+            json.dump(result.scenarios, f, indent=2)
+        
+        # Save results
+        with open(run_dir / "results.json", 'w') as f:
+            json.dump(result.results, f, indent=2)
+        
+        # Update last run (this uses atomic write now)
+        self.config["last_run_id"] = result.run_id
+        self._save_config()
+        
+        return run_dir
     
     def get_run(self, run_id: Optional[str] = None) -> Optional[RunResult]:
         """Get run results by ID or last run.

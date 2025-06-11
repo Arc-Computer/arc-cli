@@ -41,6 +41,8 @@ from arc.ingestion.parser import AgentConfigParser
 from arc.ingestion.normalizer import ConfigNormalizer
 from arc.scenarios.generator import ScenarioGenerator
 from arc.core.models.scenario import Scenario
+from arc.core.models.config import AgentConfig
+from arc.simulation.modal_orchestrator import ModalOrchestrator, ProgressUpdate
 
 
 console = ArcConsole()
@@ -71,29 +73,30 @@ async def _initialize_state():
 @click.option('--json', 'json_output', is_flag=True, help='Output JSON instead of rich text')
 @click.option('--no-confirm', is_flag=True, help='Skip cost confirmation prompt')
 @click.option('--pattern-ratio', default=0.7, type=click.FloatRange(0.0, 1.0), help='Ratio of pattern-based scenarios (0-1)')
-def run(config_path: str, scenarios: int, json_output: bool, no_confirm: bool, pattern_ratio: float):
+@click.option('--no-modal', is_flag=True, help='Disable Modal execution and use simulation instead')
+def run(config_path: str, scenarios: int, json_output: bool, no_confirm: bool, pattern_ratio: float, no_modal: bool):
     """Test an agent configuration with generated scenarios.
     
     This command:
     1. Parses your agent configuration
     2. Generates test scenarios (currency assumptions + general)  
-    3. Executes scenarios in parallel
+    3. Executes scenarios in parallel using Modal
     4. Reports reliability score and failures
     
     Example:
         arc run finance_agent_v1.yaml
     """
     # Initialize state with database connection
-    asyncio.run(_initialize_state())
+    db_available = asyncio.run(_initialize_state())
     
-    config_path = Path(config_path)
+    config_path_obj = Path(config_path)
     run_id = f"run_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid4().hex[:8]}"
     
     if not json_output:
         console.print()
         console.print(Panel.fit(
-            "[primary]Arc: Proactive Capability Assurance[/primary]",
-            border_style="primary"
+            "[bright_blue]Arc: Proactive Capability Assurance[/bright_blue]",
+            border_style="bright_blue"
         ))
         console.print()
     
@@ -150,7 +153,7 @@ def run(config_path: str, scenarios: int, json_output: bool, no_confirm: bool, p
         # Run async scenario generation
         generated_scenarios = asyncio.run(
             _generate_scenarios_async(
-                config_path=str(config_path),
+                config_path=str(config_path_obj),
                 count=scenarios,
                 pattern_ratio=pattern_ratio,
                 capabilities=capabilities,
@@ -182,7 +185,7 @@ def run(config_path: str, scenarios: int, json_output: bool, no_confirm: bool, p
             actual_cost = estimated_cost
         
         # Step 5: Calculate results
-        success_count = sum(1 for r in results if r["success"])
+        success_count = sum(1 for r in results if r.get("success"))
         failure_count = len(results) - success_count
         reliability_score = success_count / len(results) if results else 0
         
@@ -201,27 +204,27 @@ def run(config_path: str, scenarios: int, json_output: bool, no_confirm: bool, p
                 assumption_violations.extend(violations)
         
         # Save run results
-        run_result = RunResult(
+        final_run_result = RunResult(
             run_id=run_id,
-            config_path=str(config_path),
+            config_path=str(config_path_obj),
             timestamp=datetime.now(),
             scenario_count=len(generated_scenarios),
             success_count=success_count,
             failure_count=failure_count,
             reliability_score=reliability_score,
             execution_time=execution_time,
-            total_cost=actual_cost,  # Use actual cost from execution
-            scenarios=[s.to_dict() if hasattr(s, 'to_dict') else s for s in generated_scenarios],
+            total_cost=actual_cost,
+            scenarios=[s.to_dict() for s in generated_scenarios],
             results=results,
-            failures=[r for r in results if not r["success"]]
+            failures=[r for r in results if not r.get("success")]
         )
         
-        state.save_run(run_result)
+        state.save_run(final_run_result)
         
         # Display results
         if json_output:
             import json
-            print(json.dumps(run_result.to_dict(), indent=2))
+            print(json.dumps(final_run_result.to_dict(), indent=2))
         else:
             console.print()
             console.print(Panel.fit(
@@ -478,16 +481,14 @@ def _check_modal_available() -> bool:
     """Check if Modal is installed and configured."""
     try:
         import modal
-        # Check for both Modal tokens
-        has_token_id = bool(os.environ.get("MODAL_TOKEN_ID"))
-        has_token_secret = bool(os.environ.get("MODAL_TOKEN_SECRET"))
+        # Check for both Modal tokens  
+        token_id = os.environ.get("MODAL_TOKEN_ID")
+        token_secret = os.environ.get("MODAL_TOKEN_SECRET")
         
-        if has_token_id and not has_token_secret:
-            console.print(format_warning("MODAL_TOKEN_ID found but MODAL_TOKEN_SECRET is missing"))
-            console.print("Run 'modal setup' to complete authentication", style="muted")
+        if not token_id or not token_secret:
             return False
             
-        return has_token_id and has_token_secret
+        return True
     except ImportError:
         return False
 

@@ -144,18 +144,14 @@ class HybridState(CLIState):
         # Then try to save to database if available
         if self.db_connected:
             try:
-                # Check if an event loop is already running
+                # Create a new event loop for the database operation
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
                 try:
-                    loop = asyncio.get_running_loop()
-                except RuntimeError:
-                    loop = None
-
-                if loop and loop.is_running():
-                    # We're in an async context, create a task
-                    loop.create_task(self._save_to_database(result))
-                else:
-                    # We're in a sync context, use asyncio.run
-                    asyncio.run(self._save_to_database(result))
+                    loop.run_until_complete(self._save_to_database(result))
+                finally:
+                    loop.close()
+                    asyncio.set_event_loop(None)
             except Exception as e:
                 console.print(
                     f"Warning: Database save failed: {str(e)}. Data saved to files only.",

@@ -1,0 +1,59 @@
+"""
+Pydantic models for agent and tool configurations.
+"""
+from typing import Any, Dict, List, Optional, Union
+
+from pydantic import BaseModel, Field, field_validator
+
+
+class ToolConfig(BaseModel):
+    """Configuration for a single tool."""
+    name: str = Field(..., description="The name of the tool.")
+    description: Optional[str] = Field(None, description="A description of what the tool does.")
+    parameters: Dict[str, Any] = Field(default_factory=dict, description="The parameters the tool accepts, in JSON schema format.")
+
+
+class AgentConfig(BaseModel):
+    """Represents the complete configuration for an agent."""
+    model: str = Field(..., description="The name of the language model to use (e.g., 'openai/gpt-4.1').")
+    temperature: float = Field(0.0, description="The sampling temperature for the model.")
+    tools: List[ToolConfig] = Field(default_factory=list, description="A list of tools available to the agent.")
+    version_id: Optional[str] = None # This will be assigned by the system
+    system_prompt: Optional[str] = Field(None, description="The system prompt for the agent.")
+
+    class Config:
+        """Pydantic configuration."""
+        extra = "allow" # Allow extra fields to be present in the config
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Serializes the config to a dictionary."""
+        return self.dict(by_alias=True)
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "AgentConfig":
+        """Deserializes a dictionary into an AgentConfig object."""
+        return cls(**data)
+
+    @field_validator('tools', mode='before')
+    @classmethod
+    def validate_tools(cls, v):
+        """Convert string tool names to ToolConfig objects."""
+        if not isinstance(v, list):
+            return v
+        
+        validated_tools = []
+        for tool in v:
+            if isinstance(tool, str):
+                # Convert string to ToolConfig
+                validated_tools.append(ToolConfig(name=tool))
+            elif isinstance(tool, dict):
+                # Convert dict to ToolConfig
+                validated_tools.append(ToolConfig(**tool))
+            elif isinstance(tool, ToolConfig):
+                # Already a ToolConfig
+                validated_tools.append(tool)
+            else:
+                # Invalid format
+                raise ValueError(f"Tool must be a string, dict, or ToolConfig object, got {type(tool)}")
+        
+        return validated_tools 

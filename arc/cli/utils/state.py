@@ -137,6 +137,11 @@ class CLIState:
             finally:
                 if lock_acquired:
                     fcntl.flock(lock_fd, fcntl.LOCK_UN)
+                    # Remove lock file after releasing lock
+                    try:
+                        self.lock_file.unlink()
+                    except OSError:
+                        pass  # File already removed or permission issue
     
     def _validate_config(self, config: Dict[str, Any]) -> Dict[str, Any]:
         """Validate and sanitize configuration."""

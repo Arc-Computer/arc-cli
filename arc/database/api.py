@@ -21,6 +21,23 @@ from arc.database.client import ArcDBClient, DatabaseError, RetryableError
 logger = logging.getLogger(__name__)
 
 
+def convert_row_to_dict(row) -> Dict[str, Any]:
+    """
+    Convert a database row to a dictionary, handling UUID conversion.
+    
+    AsyncPG returns UUID fields as special UUID objects that need to be
+    converted to strings for JSON serialization.
+    """
+    data = dict(row._mapping)
+    
+    # Convert any UUID fields to strings
+    for key, value in data.items():
+        if hasattr(value, "hex"):  # Check if it's a UUID object
+            data[key] = str(value)
+    
+    return data
+
+
 class SimulationStatus(Enum):
     """Simulation status enum matching database constraints."""
     PENDING = "pending"
@@ -616,7 +633,7 @@ class ArcAPI:
                 if not row:
                     raise ValueError(f"Simulation {simulation_id} not found")
                 
-                data = dict(row._mapping)
+                data = convert_row_to_dict(row)
                 
                 # Calculate progress percentage
                 progress = (data["completed_scenarios"] / data["total_scenarios"] * 100) if data["total_scenarios"] > 0 else 0
@@ -699,7 +716,8 @@ class ArcAPI:
                 
                 outcomes = []
                 for row in result:
-                    data = dict(row._mapping)
+                    data = convert_row_to_dict(row)
+                    
                     # Parse JSON fields
                     data["trajectory"] = json.loads(data["trajectory"]) if data["trajectory"] else {}
                     data["metrics"] = json.loads(data["metrics"]) if data["metrics"] else {}

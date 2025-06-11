@@ -159,8 +159,13 @@ async def _get_recent_runs(db_client, limit: int = 10) -> list:
     
     runs = []
     for row in result:
+        # Convert UUID to string if needed
+        run_id = row[0]
+        if hasattr(run_id, 'hex'):
+            run_id = str(run_id)
+        
         runs.append({
-            "run_id": row[0],  # simulation_id
+            "run_id": run_id,  # simulation_id
             "config": row[2],
             "timestamp": row[3].isoformat(),
             "reliability": float(row[4] or 0),

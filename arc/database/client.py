@@ -33,6 +33,23 @@ _engine: AsyncEngine | None = None
 T = TypeVar('T')
 
 
+def convert_row_to_dict(row) -> Dict[str, Any]:
+    """
+    Convert a database row to a dictionary, handling UUID conversion.
+    
+    AsyncPG returns UUID fields as special UUID objects that need to be
+    converted to strings for JSON serialization.
+    """
+    data = dict(row._mapping)
+    
+    # Convert any UUID fields to strings
+    for key, value in data.items():
+        if hasattr(value, "hex"):  # Check if it's a UUID object
+            data[key] = str(value)
+    
+    return data
+
+
 class DatabaseError(Exception):
     """Base exception for database operations."""
     pass
@@ -171,7 +188,7 @@ class TimescaleDBHealth:
                         compression_enabled
                     FROM timescaledb_information.hypertables
                 """))
-                hypertables = [dict(row._mapping) for row in result]
+                hypertables = [convert_row_to_dict(row) for row in result]
                 logger.debug(f"Found {len(hypertables)} hypertables")
                 return hypertables
         except Exception as e:
@@ -196,7 +213,7 @@ class TimescaleDBHealth:
                     JOIN timescaledb_information.hypertables h 
                         ON cs.hypertable_name = h.hypertable_name
                 """))
-                stats = [dict(row._mapping) for row in result]
+                stats = [convert_row_to_dict(row) for row in result]
                 logger.debug(f"Compression stats retrieved for {len(stats)} hypertables")
                 return stats
         except Exception as e:
@@ -773,7 +790,7 @@ class ArcDBClient:
                 "simulation_id": simulation_id
             })
             
-            rows = [dict(row._mapping) for row in result]
+            rows = [convert_row_to_dict(row) for row in result]
             
             return {
                 "simulation_id": simulation_id,
@@ -806,7 +823,7 @@ class ArcDBClient:
                 LIMIT :limit
             """), {"limit": limit})
             
-            return [dict(row._mapping) for row in result]
+            return [convert_row_to_dict(row) for row in result]
     
     async def close(self):
         """Close database connections with proper cleanup."""

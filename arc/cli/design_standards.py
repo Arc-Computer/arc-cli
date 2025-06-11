@@ -16,13 +16,13 @@ from rich.progress import (
 
 # Enterprise color palette - professional and accessible
 COLORS = {
-    'primary': 'bright_blue',      # Headers, Arc branding, key insights
-    'success': 'bright_green',     # Improvements, positive metrics, PASS indicators
-    'warning': 'bright_yellow',    # Attention items, assumption violations
-    'error': 'bright_red',         # Failures, critical issues, FAIL indicators
-    'info': 'bright_cyan',         # Statistical data, metadata, secondary info
-    'muted': 'bright_black',       # Secondary text, supporting details
-    'accent': 'bright_magenta',    # Highlights, key values, important numbers
+    'primary': '#3B82F6',          # Headers, Arc branding, key insights (bright blue)
+    'success': '#10B981',          # Improvements, positive metrics, PASS indicators (green)
+    'warning': '#F59E0B',          # Attention items, assumption violations (yellow)
+    'error': '#EF4444',            # Failures, critical issues, FAIL indicators (red)
+    'info': '#06B6D4',             # Statistical data, metadata, secondary info (cyan)
+    'muted': '#6B7280',            # Secondary text, supporting details (gray)
+    'accent': '#8B5CF6',           # Highlights, key values, important numbers (purple)
 }
 
 # Layout standards optimized for streaming and assumption highlighting

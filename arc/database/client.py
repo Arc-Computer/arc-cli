@@ -809,6 +809,11 @@ class ArcDBClient:
             return [dict(row._mapping) for row in result]
     
     async def close(self):
-        """Close database connections."""
+        """Close database connections with proper cleanup."""
         if self.engine:
-            await self.engine.dispose()
+            try:
+                # Close all connections gracefully
+                await self.engine.dispose()
+            except Exception as e:
+                # Log but don't raise - we're shutting down anyway
+                logger.warning(f"Error during database cleanup: {e}")

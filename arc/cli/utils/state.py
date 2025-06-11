@@ -1,19 +1,18 @@
 """CLI state management for storing runs and analysis results."""
 
 import json
-import os
-import fcntl
-import time
+from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, List, Optional, Any
-from dataclasses import dataclass, asdict, field
-from contextlib import contextmanager
+from typing import Any
+
+from arc.cli.utils.file_utils import atomic_write_json
 
 
 @dataclass
 class RunResult:
     """Results from an arc run command."""
+
     run_id: str
     config_path: str
     timestamp: datetime
@@ -23,127 +22,52 @@ class RunResult:
     reliability_score: float
     execution_time: float
     total_cost: float
-    scenarios: List[Dict[str, Any]] = field(default_factory=list)
-    results: List[Dict[str, Any]] = field(default_factory=list)
-    failures: List[Dict[str, Any]] = field(default_factory=list)
-    analysis: Optional[Dict[str, Any]] = None
-    recommendations: Optional[Dict[str, Any]] = None
-    
+    scenarios: list[dict[str, Any]] = field(default_factory=list)
+    results: list[dict[str, Any]] = field(default_factory=list)
+    failures: list[dict[str, Any]] = field(default_factory=list)
+    analysis: dict[str, Any] | None = None
+    recommendations: dict[str, Any] | None = None
+
     @property
     def reliability_percentage(self) -> float:
         """Get reliability as percentage."""
         return self.reliability_score * 100
-    
-    def to_dict(self) -> Dict[str, Any]:
+
+    def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for JSON serialization."""
         data = asdict(self)
-        data['timestamp'] = self.timestamp.isoformat()
+        data["timestamp"] = self.timestamp.isoformat()
         return data
-    
+
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> 'RunResult':
+    def from_dict(cls, data: dict[str, Any]) -> "RunResult":
         """Create from dictionary."""
-        data['timestamp'] = datetime.fromisoformat(data['timestamp'])
+        data["timestamp"] = datetime.fromisoformat(data["timestamp"])
         return cls(**data)
 
 
 class CLIState:
     """Manages Arc CLI state and run history."""
-    
-    def __init__(self, state_dir: Optional[Path] = None):
+
+    def __init__(self, state_dir: Path | None = None):
         """Initialize CLI state manager.
-        
+
         Args:
             state_dir: Directory for storing state (defaults to ~/.arc)
         """
         self.state_dir = state_dir or Path.home() / ".arc"
         self.runs_dir = self.state_dir / "runs"
         self.config_file = self.state_dir / "config.json"
-        
-        # Lock file for concurrent access protection
-        self.lock_file = self.state_dir / ".lock"
-        
+
         # Create directories if they don't exist
         self.state_dir.mkdir(exist_ok=True)
         self.runs_dir.mkdir(exist_ok=True)
-        
+
         # Load or initialize config
         self.config = self._load_config()
-    
-    def _cleanup_stale_lock(self, max_age_seconds: int = 300):
-        """Clean up stale lock files older than max_age_seconds."""
-        if not self.lock_file.exists():
-            return
 
-        try:
-            with open(self.lock_file, 'r') as f:
-                lines = f.read().strip().split('\n')
-                if len(lines) >= 2:
-                    # Check if lock is older than max_age
-                    lock_timestamp = int(lines[1])
-                    if time.time() - lock_timestamp > max_age_seconds:
-                        self.lock_file.unlink()
-                        return
-                else:
-                    # Malformed lock file, remove it
-                    self.lock_file.unlink()
-                    return
-        except (OSError, ValueError, IndexError):
-            # Lock file is corrupted or unreadable, remove it
-            try:
-                self.lock_file.unlink()
-            except OSError:
-                pass  # Already removed or permission issue
 
-    @contextmanager
-    def _file_lock(self, timeout: float = 30.0):
-        """Acquire file lock for concurrent access protection."""
-        lock_acquired = False
-        start_time = time.time()
-
-        # Create lock file if it doesn't exist
-        self.lock_file.touch(exist_ok=True)
-
-        # Check for and clean up stale locks
-        self._cleanup_stale_lock()
-
-        with open(self.lock_file, 'a+') as lock_fd:
-            while True:
-                try:
-                    fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-                    # Write PID/timestamp after acquiring lock
-                    lock_fd.seek(0)
-                    lock_fd.truncate()
-                    lock_fd.write(f"{os.getpid()}\n{int(time.time())}\n")
-                    lock_fd.flush()
-                    lock_acquired = True
-                    break
-                except OSError:
-                    elapsed = time.time() - start_time
-                    if elapsed > timeout:
-                        # Provide helpful error message with suggestions
-                        raise RuntimeError(
-                            f"Could not acquire file lock after {timeout:.1f}s. "
-                            f"This may indicate:\n"
-                            f"  • Another Arc process is running\n"
-                            f"  • A previous process crashed and left a stale lock\n"
-                            f"  • Try: rm {self.lock_file} to force cleanup\n"
-                            f"  • Or wait for the current operation to complete"
-                        ) from None
-                    time.sleep(0.2)  # Less aggressive polling
-            
-            try:
-                yield
-            finally:
-                if lock_acquired:
-                    fcntl.flock(lock_fd, fcntl.LOCK_UN)
-                    # Remove lock file after releasing lock
-                    try:
-                        self.lock_file.unlink()
-                    except OSError:
-                        pass  # File already removed or permission issue
-    
-    def _validate_config(self, config: Dict[str, Any]) -> Dict[str, Any]:
+    def _validate_config(self, config: dict[str, Any]) -> dict[str, Any]:
         """Validate and sanitize configuration."""
         # Define expected schema with defaults
         schema = {
@@ -153,7 +77,7 @@ class CLIState:
             "use_modal": (bool,),
             "max_concurrent_runs": (int,),
         }
-        
+
         defaults = {
             "last_run_id": None,
             "default_scenario_count": 50,
@@ -161,9 +85,9 @@ class CLIState:
             "use_modal": True,
             "max_concurrent_runs": 5,
         }
-        
+
         validated = {}
-        
+
         for key, expected_types in schema.items():
             if key in config:
                 value = config[key]
@@ -184,7 +108,7 @@ class CLIState:
                 validated[key] = value
             else:
                 validated[key] = defaults[key]
-        
+
         # Validate ranges
         if validated["default_scenario_count"] < 1:
             validated["default_scenario_count"] = 50
@@ -192,66 +116,66 @@ class CLIState:
             validated["cost_warning_threshold"] = 0.10
         if validated["max_concurrent_runs"] < 1:
             validated["max_concurrent_runs"] = 5
-            
+
         return validated
-    
-    def _load_config(self) -> Dict[str, Any]:
+
+    def _load_config(self) -> dict[str, Any]:
         """Load CLI configuration."""
         if self.config_file.exists():
-            with self._file_lock():
-                try:
-                    with open(self.config_file, 'r') as f:
-                        raw_config = json.load(f)
-                    return self._validate_config(raw_config)
-                except (json.JSONDecodeError, KeyError, TypeError):
-                    # Config file is corrupted, return defaults
-                    return self._validate_config({})
+            try:
+                with open(self.config_file) as f:
+                    raw_config = json.load(f)
+                return self._validate_config(raw_config)
+            except (json.JSONDecodeError, KeyError, TypeError):
+                # Config file is corrupted, return defaults
+                return self._validate_config({})
         return self._validate_config({})
-    
+
     def _save_config(self) -> None:
         """Save CLI configuration."""
-        with self._file_lock():
-            with open(self.config_file, 'w') as f:
-                json.dump(self.config, f, indent=2)
-    
+        atomic_write_json(self.config_file, self.config, indent=2)
+
     def save_run(self, result: RunResult) -> Path:
-        """Save run results.
-        
+        """Save run results using atomic file operations.
+
         Args:
             result: Run result to save
-            
+
         Returns:
             Path to saved run directory
         """
-        with self._file_lock():
-            # Create run directory
-            run_dir = self.runs_dir / result.run_id
-            run_dir.mkdir(exist_ok=True)
-            
+        # Create run directory
+        run_dir = self.runs_dir / result.run_id
+        run_dir.mkdir(exist_ok=True)
+
+        # Save files atomically
+        try:
             # Save run metadata
-            with open(run_dir / "result.json", 'w') as f:
-                json.dump(result.to_dict(), f, indent=2)
-            
+            atomic_write_json(run_dir / "result.json", result.to_dict(), indent=2)
+
             # Save scenarios
-            with open(run_dir / "scenarios.json", 'w') as f:
-                json.dump(result.scenarios, f, indent=2)
-            
+            atomic_write_json(run_dir / "scenarios.json", result.scenarios, indent=2)
+
             # Save results
-            with open(run_dir / "results.json", 'w') as f:
-                json.dump(result.results, f, indent=2)
-            
-            # Update last run
+            atomic_write_json(run_dir / "results.json", result.results, indent=2)
+
+            # Update config
             self.config["last_run_id"] = result.run_id
             self._save_config()
-            
-            return run_dir
-    
-    def get_run(self, run_id: Optional[str] = None) -> Optional[RunResult]:
+
+        except Exception as e:
+            # Log but don't fail completely
+            print(f"Warning: Error saving run data: {e}")
+            # Still return the directory even if some saves failed
+
+        return run_dir
+
+    def get_run(self, run_id: str | None = None) -> RunResult | None:
         """Get run results by ID or last run.
-        
+
         Args:
             run_id: Specific run ID or None for last run
-            
+
         Returns:
             Run result or None if not found
         """
@@ -259,132 +183,133 @@ class CLIState:
             run_id = self.config.get("last_run_id")
             if run_id is None:
                 return None
-        
+
         run_dir = self.runs_dir / run_id
         if not run_dir.exists():
             return None
-        
+
         # Load run result
-        with open(run_dir / "result.json", 'r') as f:
+        with open(run_dir / "result.json") as f:
             data = json.load(f)
-        
+
         result = RunResult.from_dict(data)
-        
+
         # Load scenarios if not in result
         if not result.scenarios and (run_dir / "scenarios.json").exists():
-            with open(run_dir / "scenarios.json", 'r') as f:
+            with open(run_dir / "scenarios.json") as f:
                 result.scenarios = json.load(f)
-        
+
         # Load results if not in result
         if not result.results and (run_dir / "results.json").exists():
-            with open(run_dir / "results.json", 'r') as f:
+            with open(run_dir / "results.json") as f:
                 result.results = json.load(f)
-        
+
         # Load analysis if exists
         if (run_dir / "analysis.json").exists():
-            with open(run_dir / "analysis.json", 'r') as f:
+            with open(run_dir / "analysis.json") as f:
                 result.analysis = json.load(f)
-        
+
         # Load recommendations if exists
         if (run_dir / "recommendations.json").exists():
-            with open(run_dir / "recommendations.json", 'r') as f:
+            with open(run_dir / "recommendations.json") as f:
                 result.recommendations = json.load(f)
-        
+
         return result
-    
-    def save_analysis(self, run_id: str, analysis: Dict[str, Any]) -> None:
+
+    def save_analysis(self, run_id: str, analysis: dict[str, Any]) -> None:
         """Save analysis results for a run."""
         run_dir = self.runs_dir / run_id
         if not run_dir.exists():
             raise ValueError(f"Run {run_id} not found")
-        
-        with open(run_dir / "analysis.json", 'w') as f:
-            json.dump(analysis, f, indent=2)
-    
-    def save_recommendations(self, run_id: str, recommendations: Dict[str, Any]) -> None:
+
+        atomic_write_json(run_dir / "analysis.json", analysis, indent=2)
+
+    def save_recommendations(
+        self, run_id: str, recommendations: dict[str, Any]
+    ) -> None:
         """Save recommendations for a run."""
         run_dir = self.runs_dir / run_id
         if not run_dir.exists():
             raise ValueError(f"Run {run_id} not found")
-        
-        with open(run_dir / "recommendations.json", 'w') as f:
-            json.dump(recommendations, f, indent=2)
-    
-    def save_diff(self, diff_id: str, diff_result: Dict[str, Any]) -> None:
+
+        atomic_write_json(run_dir / "recommendations.json", recommendations, indent=2)
+
+    def save_diff(self, diff_id: str, diff_result: dict[str, Any]) -> None:
         """Save A/B test diff results.
-        
+
         Args:
             diff_id: Diff session ID
             diff_result: Diff comparison data
         """
         diffs_dir = self.state_dir / "diffs"
         diffs_dir.mkdir(exist_ok=True)
-        
+
         diff_file = diffs_dir / f"{diff_id}.json"
-        with open(diff_file, 'w') as f:
-            json.dump(diff_result, f, indent=2, default=str)
-    
-    def list_runs(self, limit: int = 10) -> List[Dict[str, Any]]:
+        atomic_write_json(diff_file, diff_result, indent=2, default=str)
+
+    def list_runs(self, limit: int = 10) -> list[dict[str, Any]]:
         """List recent runs.
-        
+
         Args:
             limit: Maximum number of runs to return
-            
+
         Returns:
             List of run summaries
         """
         runs = []
-        
+
         # Get all run directories
         run_dirs = sorted(
             [d for d in self.runs_dir.iterdir() if d.is_dir()],
             key=lambda d: d.stat().st_mtime,
-            reverse=True
+            reverse=True,
         )
-        
+
         for run_dir in run_dirs[:limit]:
             try:
-                with open(run_dir / "result.json", 'r') as f:
+                with open(run_dir / "result.json") as f:
                     data = json.load(f)
-                
-                runs.append({
-                    "run_id": data["run_id"],
-                    "config_path": data["config_path"],
-                    "timestamp": data["timestamp"],
-                    "reliability_score": data["reliability_score"],
-                    "scenario_count": data["scenario_count"],
-                    "total_cost": data["total_cost"]
-                })
+
+                runs.append(
+                    {
+                        "run_id": data["run_id"],
+                        "config_path": data["config_path"],
+                        "timestamp": data["timestamp"],
+                        "reliability_score": data["reliability_score"],
+                        "scenario_count": data["scenario_count"],
+                        "total_cost": data["total_cost"],
+                    }
+                )
             except Exception:
                 # Skip corrupted runs
                 continue
-        
+
         return runs
-    
+
     def get_total_cost(self, days: int = 30) -> float:
         """Get total cost for recent runs.
-        
+
         Args:
             days: Number of days to look back
-            
+
         Returns:
             Total cost in dollars
         """
         total = 0.0
         cutoff = datetime.now().timestamp() - (days * 24 * 60 * 60)
-        
+
         for run_dir in self.runs_dir.iterdir():
             if not run_dir.is_dir():
                 continue
-            
+
             if run_dir.stat().st_mtime < cutoff:
                 continue
-            
+
             try:
-                with open(run_dir / "result.json", 'r') as f:
+                with open(run_dir / "result.json") as f:
                     data = json.load(f)
                 total += data.get("total_cost", 0)
             except Exception:
                 continue
-        
+
         return total

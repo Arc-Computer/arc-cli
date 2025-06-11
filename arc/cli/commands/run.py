@@ -17,6 +17,9 @@ from rich.table import Table
 from arc.cli.utils import ArcConsole, CLIState, RunResult, format_error, format_success, format_warning
 from arc.cli.utils import db_manager, HybridState
 from arc.cli.utils.error_helpers import categorize_error
+from arc.cli.loading_interface import ConfigAnalysisLoader, ExecutionProgressLoader
+from arc.analysis.funnel_analyzer import FunnelAnalyzer
+from arc.analysis.assumption_detector import AssumptionDetector
 from arc.ingestion.parser import AgentConfigParser
 from arc.ingestion.normalizer import ConfigNormalizer
 from arc.scenarios.generator import ScenarioGenerator
@@ -78,23 +81,38 @@ def run(config_path: str, scenarios: int, json_output: bool, no_confirm: bool, p
         console.print()
     
     try:
-        # Step 1: Parse and validate configuration
-        if not json_output:
-            console.print("Parsing agent configuration...", style="muted")
-        
+        # Step 1: Enhanced Configuration Analysis with Loading
         parser = AgentConfigParser()
         normalizer = ConfigNormalizer()
         
-        parsed_config = parser.parse(config_path)
-        normalized_config = normalizer.normalize(parsed_config)
-        capabilities = parser.extract_capabilities(parsed_config)
-        
         if not json_output:
-            console.print(format_success(f"Configuration validated: {config_path.name}"))
-            console.print_metric("Model", normalized_config["model"])
-            console.print_metric("Temperature", normalized_config["temperature"])
-            console.print_metric("Tools", f"{len(normalized_config['tools'])} configured")
-            console.print()
+            # Use professional loading interface for config analysis
+            config_loader = ConfigAnalysisLoader(console)
+            agent_profile = asyncio.run(
+                config_loader.analyze_config_with_progress(
+                    str(config_path),
+                    parser,
+                    normalizer
+                )
+            )
+            
+            # Display professional config summary
+            config_loader.display_config_summary(agent_profile)
+            
+            # Extract components from agent profile
+            normalized_config = agent_profile["configuration"]
+            capabilities = agent_profile["capabilities"]
+        else:
+            # JSON mode: basic parsing without visual feedback
+            parsed_config = parser.parse(config_path)
+            normalized_config = normalizer.normalize(parsed_config)
+            capabilities = parser.extract_capabilities(parsed_config)
+            
+            agent_profile = {
+                "configuration": normalized_config,
+                "capabilities": capabilities,
+                "normalizer_enhancements": []
+            }
         
         # Step 2: Estimate costs
         estimated_cost = _estimate_cost(scenarios, normalized_config["model"])

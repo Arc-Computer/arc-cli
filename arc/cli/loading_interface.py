@@ -25,15 +25,14 @@ class ConfigAnalysisLoader:
         self.current_progress = None
         
     async def analyze_config_with_progress(self, config_path: str, 
-                                         parser_func: Callable,
-                                         normalizer_func: Callable) -> Dict[str, Any]:
+                                         parser, normalizer) -> Dict[str, Any]:
         """
         Analyze agent configuration with visual progress feedback.
         
         Args:
             config_path: Path to configuration file
-            parser_func: Function to parse configuration
-            normalizer_func: Function to normalize configuration
+            parser: AgentConfigParser instance
+            normalizer: ConfigNormalizer instance
             
         Returns:
             Complete agent profile with capabilities
@@ -51,7 +50,7 @@ class ConfigAnalysisLoader:
             await asyncio.sleep(0.5)  # Simulate parsing time
             
             try:
-                config = parser_func(config_path)
+                config = parser.parse(config_path)
                 progress.update(parse_task, description="[success]✓[/success] Configuration loaded")
                 await asyncio.sleep(0.2)
             except Exception as e:
@@ -63,7 +62,7 @@ class ConfigAnalysisLoader:
             await asyncio.sleep(0.8)  # Simulate capability analysis
             
             try:
-                capabilities = parser_func.extract_capabilities(config)
+                capabilities = parser.extract_capabilities(config)
                 progress.update(capabilities_task, description="[success]✓[/success] Capabilities extracted")
                 await asyncio.sleep(0.2)
             except Exception as e:
@@ -75,7 +74,7 @@ class ConfigAnalysisLoader:
             await asyncio.sleep(0.4)  # Simulate normalization
             
             try:
-                normalized_config = normalizer_func(config)
+                normalized_config = normalizer.normalize(config)
                 progress.update(normalize_task, description="[success]✓[/success] Configuration normalized")
                 await asyncio.sleep(0.2)
             except Exception as e:
@@ -87,7 +86,14 @@ class ConfigAnalysisLoader:
             await asyncio.sleep(0.3)  # Simulate profile creation
             
             try:
-                agent_profile = normalizer_func.create_arc_profile(normalized_config, capabilities)
+                # Create comprehensive agent profile
+                agent_profile = {
+                    "configuration": normalized_config,
+                    "capabilities": capabilities,
+                    "normalizer_enhancements": getattr(normalizer, 'enhancements', []),
+                    "config_path": config_path,
+                    "analysis_timestamp": time.time()
+                }
                 progress.update(profile_task, description="[success]✓[/success] Agent profile ready")
                 await asyncio.sleep(0.1)
             except Exception as e:

@@ -10,7 +10,7 @@ import os
 import logging
 import asyncio
 from typing import AsyncIterator, Dict, List, Optional, Any, TypeVar, Callable
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import json
 import hashlib
 import uuid
@@ -316,14 +316,14 @@ class ArcDBClient:
             
             query_time = asyncio.get_event_loop().time() - start_time
             self._update_metrics(query_time, True)
-            self._metrics["last_health_check"] = datetime.utcnow()
+            self._metrics["last_health_check"] = datetime.now(timezone.utc)
             
             result = {
                 "status": "healthy",
                 "extensions": extensions,
                 "hypertables": hypertables,
                 "pool_stats": pool_stats,
-                "timestamp": datetime.utcnow().isoformat(),
+                "timestamp": datetime.now(timezone.utc).isoformat(),
                 "response_time_ms": query_time * 1000
             }
             
@@ -337,7 +337,7 @@ class ArcDBClient:
             error_result = {
                 "status": "error",
                 "error": str(e),
-                "timestamp": datetime.utcnow().isoformat(),
+                "timestamp": datetime.now(timezone.utc).isoformat(),
                 "response_time_ms": query_time * 1000
             }
             
@@ -430,13 +430,13 @@ class ArcDBClient:
             return {
                 "status": "success", 
                 "message": "Schema deployed successfully",
-                "timestamp": datetime.utcnow().isoformat()
+                "timestamp": datetime.now(timezone.utc).isoformat()
             }
         except Exception as e:
             return {
                 "status": "error",
                 "error": str(e),
-                "timestamp": datetime.utcnow().isoformat()
+                "timestamp": datetime.now(timezone.utc).isoformat()
             }
     
     # Configuration Management
@@ -550,7 +550,7 @@ class ArcDBClient:
                     "execution_time_ms": execution_time_ms,
                     "metadata": json.dumps(metadata or {}),
                     "completed_scenarios": completed_scenarios,
-                    "completed_at": completed_at or datetime.utcnow(),
+                    "completed_at": completed_at or datetime.now(timezone.utc),
                 },
             )
 
@@ -579,6 +579,22 @@ class ArcDBClient:
                 })
 
     # Outcome Recording (Optimized for TimescaleDB hypertable)
+    def _augment_trajectory(self, trajectory: Dict[str, Any], outcome_data: Dict[str, Any]) -> Dict[str, Any]:
+        """Augment trajectory data with required fields if missing."""
+        if not isinstance(trajectory, dict):
+            trajectory = {}
+        
+        # Create a copy to avoid modifying the original
+        augmented = trajectory.copy()
+        
+        # Add required fields if missing
+        if "start_time" not in augmented:
+            augmented["start_time"] = outcome_data.get("execution_time", datetime.now(timezone.utc)).isoformat()
+        if "status" not in augmented:
+            augmented["status"] = outcome_data.get("status", "error")
+            
+        return augmented
+    
     def _validate_trajectory(self, trajectory: Dict[str, Any]) -> None:
         """Validate trajectory data meets database constraints."""
         if not isinstance(trajectory, dict):
@@ -609,9 +625,12 @@ class ArcDBClient:
         """Record individual scenario outcome to TimescaleDB hypertable."""
         outcome_id = str(uuid.uuid4())
         
-        # Validate trajectory data
-        if "trajectory" in outcome_data:
-            self._validate_trajectory(outcome_data["trajectory"])
+        # Augment and validate trajectory
+        trajectory = self._augment_trajectory(
+            outcome_data.get("trajectory", {}), 
+            outcome_data
+        )
+        self._validate_trajectory(trajectory)
         
         # Ensure scenario exists before recording outcome
         await self.ensure_scenario_exists(
@@ -636,13 +655,13 @@ class ArcDBClient:
                 "outcome_id": outcome_id,
                 "simulation_id": outcome_data["simulation_id"],
                 "scenario_id": outcome_data["scenario_id"],
-                "execution_time": outcome_data.get("execution_time", datetime.utcnow()),
+                "execution_time": outcome_data.get("execution_time", datetime.now(timezone.utc)),
                 "status": outcome_data["status"],
                 "reliability_score": outcome_data["reliability_score"],
                 "execution_time_ms": outcome_data["execution_time_ms"],
                 "tokens_used": outcome_data["tokens_used"],
                 "cost_usd": outcome_data["cost_usd"],
-                "trajectory": json.dumps(outcome_data["trajectory"]),
+                "trajectory": json.dumps(trajectory),
                 "modal_call_id": outcome_data.get("modal_call_id"),
                 "sandbox_id": outcome_data.get("sandbox_id"),
                 "error_code": outcome_data.get("error_code"),
@@ -658,28 +677,33 @@ class ArcDBClient:
         """Batch insert outcomes for high-throughput Modal executions."""
         outcome_ids = [str(uuid.uuid4()) for _ in outcomes]
 
-        # Validate all trajectories and ensure scenarios exist
-        for outcome in outcomes:
-            if "trajectory" in outcome:
-                self._validate_trajectory(outcome["trajectory"])
+        # Process outcomes and prepare batch data
+        batch_data = []
+        for i, outcome in enumerate(outcomes):
+            # Augment and validate trajectory
+            trajectory = self._augment_trajectory(
+                outcome.get("trajectory", {}), 
+                outcome
+            )
+            self._validate_trajectory(trajectory)
+            
+            # Ensure scenario exists
             await self.ensure_scenario_exists(
                 outcome["scenario_id"],
                 outcome.get("scenario_data")
             )
-        
-        batch_data = []
-        for i, outcome in enumerate(outcomes):
+            
             batch_data.append({
                 "outcome_id": outcome_ids[i],
                 "simulation_id": outcome["simulation_id"],
                 "scenario_id": outcome["scenario_id"],
-                "execution_time": outcome.get("execution_time", datetime.utcnow()),
+                "execution_time": outcome.get("execution_time", datetime.now(timezone.utc)),
                 "status": outcome["status"],
                 "reliability_score": outcome["reliability_score"],
                 "execution_time_ms": outcome["execution_time_ms"],
                 "tokens_used": outcome["tokens_used"],
                 "cost_usd": outcome["cost_usd"],
-                "trajectory": json.dumps(outcome["trajectory"]),
+                "trajectory": json.dumps(trajectory),
                 "modal_call_id": outcome.get("modal_call_id"),
                 "sandbox_id": outcome.get("sandbox_id"),
                 "error_code": outcome.get("error_code"),

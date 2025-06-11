@@ -92,14 +92,26 @@ class ArcAPI:
                 - created_at: Timestamp of creation
         """
         try:
-            # Extract scenario IDs from scenario objects
-            scenario_ids = [s.get("id", f"scenario_{i}") for i, s in enumerate(scenarios)]
+            # Convert scenarios to dict format if needed and extract IDs
+            scenario_dicts = []
+            scenario_ids = []
+            
+            for i, scenario in enumerate(scenarios):
+                if hasattr(scenario, 'to_dict'):
+                    scenario_dict = scenario.to_dict()
+                elif isinstance(scenario, dict):
+                    scenario_dict = scenario
+                else:
+                    scenario_dict = {"id": f"scenario_{i}", "task": str(scenario)}
+                
+                scenario_dicts.append(scenario_dict)
+                scenario_ids.append(scenario_dict.get("id", f"scenario_{i}"))
             
             # Ensure scenarios exist before creating simulation
-            for scenario in scenarios:
+            for i, scenario_dict in enumerate(scenario_dicts):
                 await self.db.ensure_scenario_exists(
-                    scenario.get("id", f"scenario_{scenarios.index(scenario)}"),
-                    scenario
+                    scenario_dict.get("id", f"scenario_{i}"),
+                    scenario_dict
                 )
             
             # Create simulation record
@@ -378,6 +390,126 @@ class ArcAPI:
         except Exception as e:
             logger.error(f"Failed to record batch outcomes: {e}")
             raise DatabaseError(f"Failed to record batch outcomes: {e}") from e
+
+    async def record_modal_result(
+        self,
+        simulation_id: str,
+        scenario: Any,
+        modal_result: Dict[str, Any],
+        call_index: int = 0
+    ) -> str:
+        """
+        Record a Modal execution result for a scenario.
+        
+        This is the production function that handles the raw Modal result
+        and transforms it into the proper database format automatically.
+        
+        Args:
+            simulation_id: ID of the simulation
+            scenario: Scenario object or dict
+            modal_result: Raw result from _execute_with_modal
+            call_index: Index for generating call IDs
+            
+        Returns:
+            outcome_id: UUID of the recorded outcome
+        """
+        try:
+            # Extract scenario ID from dict or object
+            if isinstance(scenario, dict):
+                scenario_id = scenario.get("id", f"scenario_{call_index}")
+            elif hasattr(scenario, 'id'):
+                scenario_id = scenario.id
+            else:
+                scenario_id = f"scenario_{call_index}"
+            
+            # Prepare trajectory with required fields
+            execution_time = datetime.now(timezone.utc)
+            status = "success" if modal_result.get("success", False) else "error"
+            
+            # Ensure trajectory has required fields
+            trajectory = modal_result.copy() if isinstance(modal_result, dict) else {}
+            if "start_time" not in trajectory:
+                trajectory["start_time"] = execution_time.isoformat()
+            if "status" not in trajectory:
+                trajectory["status"] = status
+            
+            # Transform Modal result to outcome format
+            outcome_data = {
+                "simulation_id": simulation_id,
+                "scenario_id": scenario_id,
+                "execution_time": execution_time,
+                "status": status,
+                "reliability_score": modal_result.get("reliability_score", 0.5),
+                "execution_time_ms": int(modal_result.get("execution_time", 0) * 1000),
+                "tokens_used": modal_result.get("tokens_used", 100),
+                "cost_usd": modal_result.get("cost", 0.001),
+                "trajectory": trajectory,
+                "modal_call_id": f"modal_call_{call_index}",
+                "sandbox_id": f"sandbox_{call_index}"
+            }
+            
+            # Record using existing function
+            outcome_id = await self.db.record_outcome(outcome_data)
+            
+            logger.debug(f"Recorded Modal result for scenario {scenario_id}: {outcome_id}")
+            return outcome_id
+            
+        except Exception as e:
+            logger.error(f"Failed to record Modal result: {e}")
+            raise DatabaseError(f"Failed to record Modal result: {e}") from e
+
+    async def complete_simulation_from_results(
+        self,
+        simulation_id: str,
+        scenarios: List[Any],
+        modal_results: List[Dict[str, Any]],
+        execution_time: float,
+        total_cost: float
+    ) -> Dict[str, Any]:
+        """
+        Complete a simulation using raw Modal results.
+        
+        This is the production function that handles completion automatically
+        based on the Modal execution results.
+        
+        Args:
+            simulation_id: ID of the simulation to complete
+            scenarios: List of scenario objects
+            modal_results: Raw results from _execute_with_modal
+            execution_time: Total execution time in seconds
+            total_cost: Total cost in USD
+            
+        Returns:
+            Dict with completion status
+        """
+        try:
+            # Calculate aggregate metrics from Modal results
+            successful_runs = sum(1 for r in modal_results if r.get("success", False))
+            
+            # Calculate average reliability only from results with explicit scores
+            results_with_scores = [r for r in modal_results if "reliability_score" in r]
+            if results_with_scores:
+                avg_reliability = sum(r["reliability_score"] for r in results_with_scores) / len(results_with_scores)
+            else:
+                # Default to 0.5 if no results have reliability scores
+                avg_reliability = 0.5 if modal_results else 0
+            
+            # Create suite result automatically
+            suite_result = {
+                "scenarios_run": len(scenarios),
+                "successful_runs": successful_runs,
+                "average_reliability_score": avg_reliability,
+                "total_cost_usd": total_cost,
+                "parallel_execution_time": execution_time,
+                "results": modal_results
+            }
+            
+            # Use existing complete_simulation function
+            return await self.complete_simulation(simulation_id, suite_result)
+            
+        except Exception as e:
+            logger.error(f"Failed to complete simulation from results: {e}")
+            raise DatabaseError(f"Failed to complete simulation from results: {e}") from e
     
     async def complete_simulation(
         self,
@@ -583,7 +715,12 @@ class ArcAPI:
     # ==================== Helper Methods ====================
     
     def _categorize_error(self, error_message: Optional[str]) -> Optional[str]:
-        """Categorize errors based on error message patterns."""
+        """
+        Categorize errors based on error message patterns.
+        
+        Valid categories from database constraint:
+        'timeout', 'tool_error', 'model_error', 'validation_error', 'system_error', 'sandbox_error'
+        """
         if not error_message:
             return None
         
@@ -591,18 +728,16 @@ class ArcAPI:
         
         if "timeout" in error_lower:
             return "timeout"
-        elif "rate limit" in error_lower:
-            return "rate_limit"
-        elif "connection" in error_lower or "network" in error_lower:
-            return "network"
-        elif "parsing" in error_lower or "json" in error_lower:
-            return "parsing"
-        elif "tool" in error_lower:
+        elif "tool" in error_lower or "function" in error_lower:
             return "tool_error"
-        elif "memory" in error_lower or "resource" in error_lower:
-            return "resource"
+        elif "model" in error_lower or "openai" in error_lower or "llm" in error_lower:
+            return "model_error"
+        elif "validation" in error_lower or "parsing" in error_lower or "json" in error_lower or "schema" in error_lower:
+            return "validation_error"
+        elif "modal" in error_lower or "sandbox" in error_lower or "container" in error_lower:
+            return "sandbox_error"
         else:
-            return "other"
+            return "system_error"  # Default fallback for any other errors
 
 
 # Convenience function for creating API instance

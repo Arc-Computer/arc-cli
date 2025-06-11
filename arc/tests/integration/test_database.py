@@ -179,7 +179,7 @@ class TimescaleDBTester:
                     "cost_usd": random.uniform(0.001, 0.05),
                     "trajectory": {
                         "start_time": execution_time.isoformat(),
-                        "status": "completed",
+                        "status": "success" if random.random() > 0.3 else "error",
                         "steps": [f"step_{j}" for j in range(random.randint(3, 8))],
                         "result": f"test_result_{i}"
                     },
@@ -215,18 +215,19 @@ class TimescaleDBTester:
             scenario_ids = self.test_data["scenario_ids"]
             
             for i in range(batch_size):
+                status = random.choice(["success", "error", "timeout"])
                 batch_outcomes.append({
                     "simulation_id": self.test_data["simulation_id"],
                     "scenario_id": scenario_ids[i % len(scenario_ids)],  # Cycle through actual scenario IDs
                     "execution_time": datetime.now(timezone.utc) - timedelta(seconds=i*30),
-                    "status": random.choice(["success", "error", "timeout"]),
+                    "status": status,
                     "reliability_score": random.uniform(0.6, 1.0),
                     "execution_time_ms": random.randint(500, 3000),
                     "tokens_used": random.randint(50, 300),
                     "cost_usd": random.uniform(0.001, 0.02),
                     "trajectory": {
                         "start_time": datetime.now(timezone.utc).isoformat(),
-                        "status": "completed",
+                        "status": status,
                         "batch_id": i
                     },
                     "modal_call_id": f"batch-modal-{i}",
@@ -390,7 +391,7 @@ class TimescaleDBTester:
                         "cost_usd": 0.01,
                         "trajectory": {
                             "start_time": datetime.now(timezone.utc).isoformat(),
-                            "status": "completed",
+                            "status": "success",
                             "modal_instance": modal_instance,
                             "batch": scenario_batch
                         },

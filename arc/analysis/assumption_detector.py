@@ -7,9 +7,11 @@ in real-time during agent execution, with domain-aware pattern matching.
 import logging
 import json
 import asyncio
+import os
 from typing import Dict, List, Any, Optional, Tuple
 from dataclasses import dataclass
 from datetime import datetime
+import aiohttp
 
 from arc.cli.message_templates import ASSUMPTION_MESSAGES
 
@@ -319,17 +321,113 @@ class AssumptionDetector:
     async def _ai_enhanced_detection(self, trajectory: Dict[str, Any], 
                                    agent_profile: Dict[str, Any]) -> List[AssumptionViolation]:
         """Use AI model for enhanced assumption detection."""
-        # This would integrate with actual AI models
-        # For now, return placeholder enhanced analysis
-        
         logger.info(f"Running AI-enhanced analysis with {self.model_name}")
         
-        # Simulate AI analysis delay
-        await asyncio.sleep(0.1)
+        api_key = os.environ.get("OPENROUTER_API_KEY")
+        if not api_key:
+            logger.warning("OPENROUTER_API_KEY not set, skipping AI-enhanced detection")
+            return []
         
-        # Enhanced analysis would happen here using the AI model
-        # For now, return empty list as we'd need actual API integration
-        return []
+        try:
+            # Extract trajectory context
+            scenario = trajectory.get("scenario", {})
+            task_prompt = scenario.get("task_prompt", "")
+            events = trajectory.get("full_trajectory", [])
+            final_output = trajectory.get("final_output", "")
+            
+            # Get agent capabilities for context
+            capabilities = agent_profile.get("capabilities", {})
+            domains = capabilities.get("domains", ["general"])
+            
+            # Create comprehensive prompt for assumption detection
+            detection_prompt = f"""
+            Analyze this failed AI agent execution for hidden assumptions:
+
+            AGENT DOMAINS: {', '.join(domains)}
+            TASK: {task_prompt}
+            EXECUTION EVENTS: {json.dumps(events[:10])}
+            FINAL OUTPUT: {final_output}
+            STATUS: {trajectory.get("status", "error")}
+
+            Identify assumption violations in these categories:
+            1. Currency assumptions (e.g., assuming USD without validation)
+            2. Language/encoding assumptions (e.g., assuming English input)
+            3. Timezone assumptions (e.g., using system time without context)
+            4. Data format assumptions (e.g., expecting specific formats)
+            5. Permission/access assumptions (e.g., assuming file access)
+
+            For each assumption found, provide:
+            - type: currency/language/timezone/format/permission
+            - severity: low/medium/high/critical
+            - description: Brief description of the assumption
+            - minimal_reproduction: How to reproduce this issue
+            - suggested_fix: How to fix this assumption
+            - business_impact: What could go wrong in production
+
+            Respond with a JSON array of assumption violations found. If no clear assumptions, return empty array [].
+            """
+            
+            async with aiohttp.ClientSession() as session:
+                headers = {
+                    "Authorization": f"Bearer {api_key}",
+                    "Content-Type": "application/json",
+                    "HTTP-Referer": "https://github.com/Arc-Computer/arc-cli",
+                    "X-Title": "Arc Assumption Detection"
+                }
+                
+                payload = {
+                    "model": self.model_name,
+                    "messages": [
+                        {"role": "system", "content": "You are an expert at identifying hidden assumptions in AI agent behavior."},
+                        {"role": "user", "content": detection_prompt}
+                    ],
+                    "temperature": 0.4,
+                    "max_tokens": 500
+                }
+                
+                async with session.post(
+                    "https://openrouter.ai/api/v1/chat/completions",
+                    headers=headers,
+                    json=payload
+                ) as response:
+                    if response.status == 200:
+                        result = await response.json()
+                        ai_response = result["choices"][0]["message"]["content"]
+                        
+                        # Parse JSON response
+                        try:
+                            violations_data = json.loads(ai_response)
+                            if not isinstance(violations_data, list):
+                                violations_data = []
+                            
+                            violations = []
+                            for v_data in violations_data[:3]:  # Limit to top 3 violations
+                                violation = AssumptionViolation(
+                                    type=v_data.get("type", "unknown"),
+                                    severity=v_data.get("severity", "medium"),
+                                    confidence=85.0,  # High confidence from AI detection
+                                    description=v_data.get("description", "AI-detected assumption"),
+                                    minimal_reproduction=v_data.get("minimal_reproduction", "See trajectory"),
+                                    trajectory_id=trajectory.get("id", "unknown"),
+                                    scenario_context=scenario,
+                                    suggested_fix=v_data.get("suggested_fix", "Review agent configuration"),
+                                    business_impact=v_data.get("business_impact", "Potential reliability issue")
+                                )
+                                violations.append(violation)
+                            
+                            logger.info(f"AI detected {len(violations)} assumption violations")
+                            return violations
+                            
+                        except json.JSONDecodeError:
+                            logger.warning(f"Failed to parse AI response as JSON: {ai_response}")
+                            return []
+                    else:
+                        logger.error(f"OpenRouter API error: {response.status}")
+                        return []
+                        
+        except Exception as e:
+            logger.error(f"AI-enhanced detection error: {e}")
+            return []
     
     def _score_violations(self, violations: List[AssumptionViolation], 
                          agent_profile: Dict[str, Any]) -> List[AssumptionViolation]:

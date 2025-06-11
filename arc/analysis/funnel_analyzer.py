@@ -7,9 +7,11 @@ providing step-by-step success rate tracking and bottleneck identification.
 import logging
 import asyncio
 import json
+import os
 from typing import Dict, List, Any, Optional, Tuple
 from collections import defaultdict
 from dataclasses import dataclass
+import aiohttp
 
 from arc.ingestion.parser import AgentConfigParser
 from arc.ingestion.normalizer import ConfigNormalizer
@@ -426,12 +428,52 @@ class FunnelAnalyzer:
             Respond with only a JSON object with reasoning_score (1-10) and explanation fields.
             """
             
-            # In a real implementation, this would call the OpenRouter API
-            # For now, return a mock analysis based on simple heuristics
-            if "error" in str(events).lower() or "failed" in str(final_output).lower():
-                return False
-            else:
-                return True
+            # Make real API call to OpenRouter
+            api_key = os.environ.get("OPENROUTER_API_KEY")
+            if not api_key:
+                logger.warning("OPENROUTER_API_KEY not set, using heuristic analysis")
+                return "error" not in str(events).lower() and "failed" not in str(final_output).lower()
+            
+            async with aiohttp.ClientSession() as session:
+                headers = {
+                    "Authorization": f"Bearer {api_key}",
+                    "Content-Type": "application/json",
+                    "HTTP-Referer": "https://github.com/Arc-Computer/arc-cli",
+                    "X-Title": "Arc CLI Analysis"
+                }
+                
+                payload = {
+                    "model": self.ai_model,
+                    "messages": [
+                        {"role": "system", "content": "You are an AI quality assurance expert analyzing agent execution quality."},
+                        {"role": "user", "content": analysis_prompt}
+                    ],
+                    "temperature": 0.3,
+                    "max_tokens": 200
+                }
+                
+                async with session.post(
+                    "https://openrouter.ai/api/v1/chat/completions",
+                    headers=headers,
+                    json=payload
+                ) as response:
+                    if response.status == 200:
+                        result = await response.json()
+                        ai_response = result["choices"][0]["message"]["content"]
+                        
+                        # Parse JSON response
+                        try:
+                            analysis = json.loads(ai_response)
+                            score = analysis.get("reasoning_score", 5)
+                            logger.info(f"AI reasoning analysis: score={score}, explanation={analysis.get('explanation', 'N/A')}")
+                            return score >= 7  # Consider good if score is 7 or above
+                        except json.JSONDecodeError:
+                            logger.warning(f"Failed to parse AI response as JSON: {ai_response}")
+                            return False
+                    else:
+                        logger.error(f"OpenRouter API error: {response.status}")
+                        # Fallback to heuristic
+                        return "error" not in str(events).lower() and "failed" not in str(final_output).lower()
                 
         except Exception as e:
             logger.error(f"AI reasoning analysis error: {e}")
@@ -460,13 +502,56 @@ class FunnelAnalyzer:
             Respond with only a JSON object with quality_score (1-10) and explanation fields.
             """
             
-            # In a real implementation, this would call the OpenRouter API
-            # For now, return quality assessment based on output length and keywords
-            if len(str(final_output).strip()) > 50 and not any(word in str(final_output).lower() 
-                                                             for word in ["error", "failed", "cannot", "unable"]):
-                return True
-            else:
-                return False
+            # Make real API call to OpenRouter
+            api_key = os.environ.get("OPENROUTER_API_KEY")
+            if not api_key:
+                logger.warning("OPENROUTER_API_KEY not set, using heuristic analysis")
+                return len(str(final_output).strip()) > 50 and not any(
+                    word in str(final_output).lower() for word in ["error", "failed", "cannot", "unable"]
+                )
+            
+            async with aiohttp.ClientSession() as session:
+                headers = {
+                    "Authorization": f"Bearer {api_key}",
+                    "Content-Type": "application/json",
+                    "HTTP-Referer": "https://github.com/Arc-Computer/arc-cli",
+                    "X-Title": "Arc CLI Analysis"
+                }
+                
+                payload = {
+                    "model": self.ai_model,
+                    "messages": [
+                        {"role": "system", "content": "You are an AI quality assurance expert evaluating agent output quality."},
+                        {"role": "user", "content": quality_prompt}
+                    ],
+                    "temperature": 0.3,
+                    "max_tokens": 200
+                }
+                
+                async with session.post(
+                    "https://openrouter.ai/api/v1/chat/completions",
+                    headers=headers,
+                    json=payload
+                ) as response:
+                    if response.status == 200:
+                        result = await response.json()
+                        ai_response = result["choices"][0]["message"]["content"]
+                        
+                        # Parse JSON response
+                        try:
+                            analysis = json.loads(ai_response)
+                            score = analysis.get("quality_score", 5)
+                            logger.info(f"AI output quality analysis: score={score}, explanation={analysis.get('explanation', 'N/A')}")
+                            return score >= 7  # Consider good if score is 7 or above
+                        except json.JSONDecodeError:
+                            logger.warning(f"Failed to parse AI response as JSON: {ai_response}")
+                            return True  # Default to success if parse fails
+                    else:
+                        logger.error(f"OpenRouter API error: {response.status}")
+                        # Fallback to heuristic
+                        return len(str(final_output).strip()) > 50 and not any(
+                            word in str(final_output).lower() for word in ["error", "failed", "cannot", "unable"]
+                        )
                 
         except Exception as e:
             logger.error(f"AI output quality analysis error: {e}")

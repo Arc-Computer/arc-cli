@@ -255,8 +255,6 @@ async def _run_impl(
         # Fallback cost estimation if not provided
         if actual_cost == 0.0:
             actual_cost = estimated_cost
-
-        execution_time = time.time() - start_time
         
         # Step 5: Calculate results
         success_count = sum(1 for r in results if r.get("success"))
@@ -268,14 +266,20 @@ async def _run_impl(
         currency_failures = []
 
         for r in results:
-            if not r["success"]:
-                # Check for currency failures in failure reason
-                if "currency" in r.get("failure_reason", "").lower():
-                    currency_failures.append(r)
+            try:
+                if not r["success"]:
+                    # Check for currency failures in failure reason
+                    failure_reason = r.get("failure_reason", "") or ""
+                    if "currency" in failure_reason.lower():
+                        currency_failures.append(r)
 
-                # Collect assumption violations from AI analysis
-                violations = r.get("assumptions_detected", [])
-                assumption_violations.extend(violations)
+                    # Collect assumption violations from AI analysis
+                    violations = r.get("assumptions_detected", []) or []
+                    assumption_violations.extend(violations)
+            except Exception as e:
+                console.print(f"[red]Error processing result: {e}[/red]")
+                console.print(f"[red]Result data: {r}[/red]")
+                continue
 
         # Save run results
         final_run_result = RunResult(
@@ -321,18 +325,23 @@ async def _run_impl(
             
             # Show assumption violations discovered
             if assumption_violations:
-                violation_types = {}
-                for violation in assumption_violations:
-                    vtype = violation.get("type", "unknown")
-                    violation_types[vtype] = violation_types.get(vtype, 0) + 1
+                try:
+                    violation_types = {}
+                    for violation in assumption_violations:
+                        vtype = violation.get("type", "unknown") or "unknown"
+                        violation_types[vtype] = violation_types.get(vtype, 0) + 1
 
-                # Show most common violation type
-                most_common = max(violation_types.items(), key=lambda x: x[1])
-                table.add_row(
-                    "Primary Assumption Violation",
-                    f"{most_common[0].title()}: {most_common[1]} occurrences",
-                    style="error",
-                )
+                    # Show most common violation type
+                    if violation_types:
+                        most_common = max(violation_types.items(), key=lambda x: x[1])
+                        table.add_row(
+                            "Primary Assumption Violation",
+                            f"{(most_common[0] or 'unknown').title()}: {most_common[1]} occurrences",
+                            style="error",
+                        )
+                except Exception as e:
+                    console.print(f"[red]Error processing assumption violations: {e}[/red]")
+                    console.print(f"[red]Violations: {assumption_violations}[/red]")
 
             if currency_failures:
                 table.add_row(
@@ -349,32 +358,38 @@ async def _run_impl(
 
             # Display top assumption violations with business impact
             if assumption_violations:
-                console.print_header("Key Assumption Violations Discovered")
+                try:
+                    console.print_header("Key Assumption Violations Discovered")
 
-                # Group by type and show top 3
-                violation_groups = {}
-                for violation in assumption_violations:
-                    vtype = violation.get("type", "unknown")
-                    if vtype not in violation_groups:
-                        violation_groups[vtype] = []
-                    violation_groups[vtype].append(violation)
+                    # Group by type and show top 3
+                    violation_groups = {}
+                    for violation in assumption_violations:
+                        if not isinstance(violation, dict):
+                            continue
+                        vtype = violation.get("type", "unknown") or "unknown"
+                        if vtype not in violation_groups:
+                            violation_groups[vtype] = []
+                        violation_groups[vtype].append(violation)
 
-                for _i, (vtype, violations) in enumerate(
-                    list(violation_groups.items())[:3]
-                ):
-                    violation = violations[0]  # Show representative violation
-                    console.print(
-                        console.format_assumption(
-                            vtype.title(),
-                            violation.get("description", "No description"),
-                            violation.get("business_impact", "Unknown impact"),
+                    for _i, (vtype, violations) in enumerate(
+                        list(violation_groups.items())[:3]
+                    ):
+                        violation = violations[0]  # Show representative violation
+                        console.print(
+                            console.format_assumption(
+                                (vtype or "unknown").title(),
+                                violation.get("description", "No description") or "No description",
+                                violation.get("business_impact", "Unknown impact") or "Unknown impact",
+                            )
                         )
-                    )
-                    console.print(
-                        f"[muted]  → Fix: {violation.get('suggested_fix', 'No suggestion available')}[/muted]"
-                    )
+                        console.print(
+                            f"[muted]  → Fix: {violation.get('suggested_fix', 'No suggestion available') or 'No suggestion available'}[/muted]"
+                        )
+                        console.print()
                     console.print()
-                console.print()
+                except Exception as e:
+                    console.print(f"[red]Error displaying violations: {e}[/red]")
+                    console.print(f"[red]Violations data: {assumption_violations}[/red]")
 
             console.print(
                 "Run [info]arc analyze[/info] to see detailed breakdown", style="muted"
@@ -633,6 +648,15 @@ async def _check_modal_available(max_retries: int = 3) -> bool:
         True if Modal is available and configured, False otherwise
     """
     try:
+        # Check if using deployed app first (no auth needed)
+        if os.environ.get("ARC_USE_DEPLOYED_APP"):
+            try:
+                from arc.modal.public_api import ArcModalAPI
+                if ArcModalAPI.is_available():
+                    return True
+            except ImportError:
+                pass
+        
         import modal
 
         # First check if Modal package is properly installed
@@ -1188,7 +1212,7 @@ async def _process_modal_result_with_intelligence(
         "assumptions_detected": assumptions_detected,
         "modal_call_id": os.environ.get("MODAL_FUNCTION_CALL_ID"),
         "error_category": categorize_error(trajectory.get("final_response"))
-        if trajectory.get("status") == "error"
+        if trajectory.get("status") == "error" and trajectory.get("final_response")
         else None,
     }
 

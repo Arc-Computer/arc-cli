@@ -4,6 +4,7 @@ This module provides a clean interface for using deployed Modal functions
 without requiring authentication.
 """
 
+import asyncio
 import os
 from typing import Any, Dict, List, AsyncIterator
 
@@ -41,10 +42,11 @@ class ArcModalAPI:
             
         try:
             # Look up the deployed function
-            evaluate_fn = modal.Function.lookup(
-                "arc-production", 
-                "evaluate_single_scenario"
-            )
+            app_name = "arc-production"
+            func_name = "evaluate_single_scenario"
+            
+            evaluate_fn = modal.Function.from_name(app_name, func_name)
+                
         except Exception as e:
             raise RuntimeError(f"Failed to find deployed Modal function: {e}")
         
@@ -86,8 +88,8 @@ class ArcModalAPI:
             return False
             
         try:
-            # Try to look up the function
-            modal.Function.lookup("arc-production", "evaluate_single_scenario")
+            # Try to find the deployed function
+            modal.Function.from_name("arc-production", "evaluate_single_scenario")
             return True
         except:
             return False

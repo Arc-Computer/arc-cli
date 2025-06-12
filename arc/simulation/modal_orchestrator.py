@@ -116,19 +116,20 @@ class ModalOrchestrator:
         simulation_id = None
         if self.db_client:
             try:
-                config_version_id = str(UUID("00000000-0000-0000-0000-000000000000"))  # Placeholder
+                # Create a proper config version first
+                import uuid
+                config_version_id = await self.db_client.create_configuration(
+                    name=f"Agent Config {run_id}",
+                    user_id=str(uuid.uuid4()),  # Generate proper UUID for system user
+                    initial_config=agent_config.model_dump()
+                )
                 
                 scenario_ids = [scenario.id for scenario in scenarios]
                 simulation_id = await self.db_client.create_simulation(
                     config_version_id=config_version_id,
                     scenario_set=scenario_ids,
                     simulation_name=f"Modal Run {run_id}",
-                    modal_app_id=self.modal_app_name,
-                    metadata={
-                        "estimated_cost": estimated_cost,
-                        "agent_model": agent_config.model,
-                        "run_id": run_id
-                    }
+                    modal_app_id=self.modal_app_name
                 )
                 self.console.print(f"[bold green]Database tracking enabled[/bold green] - Simulation ID: {simulation_id[:8]}...")
             except Exception as e:
@@ -149,34 +150,37 @@ class ModalOrchestrator:
             # Check if Modal is available, otherwise simulate
             modal_available = True
             try:
-                if not os.environ.get("MODAL_TOKEN_ID") or not os.environ.get("MODAL_TOKEN_SECRET"):
+                # Check for deployed app first
+                if os.environ.get("ARC_USE_DEPLOYED_APP"):
+                    try:
+                        from arc.modal.public_api import ArcModalAPI
+                        modal_available = ArcModalAPI.is_available()
+                    except ImportError:
+                        modal_available = False
+                elif not os.environ.get("MODAL_TOKEN_ID") or not os.environ.get("MODAL_TOKEN_SECRET"):
                     modal_available = False
             except Exception:
                 modal_available = False
 
             if modal_available:
-                # Execute with Modal
-                self.console.print("[bold green]Executing on Modal...[/bold green]")
-                
-                # Convert scenarios to Modal format
-                scenario_dicts = []
-                for scenario in scenarios:
-                    if hasattr(scenario, 'model_dump'):
-                        scenario_dicts.append(scenario.model_dump())
-                    elif hasattr(scenario, 'to_dict'):
-                        scenario_dicts.append(scenario.to_dict())
-                    else:
-                        scenario_dicts.append(scenario)
+                # Check if using deployed app
+                if os.environ.get("ARC_USE_DEPLOYED_APP"):
+                    # Execute with deployed Modal app
+                    self.console.print("[bold green]Executing on deployed Modal app...[/bold green]")
+                    
+                    from arc.modal.public_api import ArcModalAPI
+                    
+                    # Convert scenarios to format expected by deployed app
+                    scenario_dicts = []
+                    for scenario in scenarios:
+                        if hasattr(scenario, 'model_dump'):
+                            scenario_dicts.append(scenario.model_dump())
+                        elif hasattr(scenario, 'to_dict'):
+                            scenario_dicts.append(scenario.to_dict())
+                        else:
+                            scenario_dicts.append(scenario)
 
-                # Create scenario tuples for Modal
-                scenario_tuples = [
-                    (scenario_dict, agent_config.model_dump(), i) 
-                    for i, scenario_dict in enumerate(scenario_dicts)
-                ]
-
-                # Execute using Modal with progress tracking
-                with modal_app.run():
-                    active_containers = min(len(scenario_tuples), 50)  # Max containers
+                    active_containers = min(len(scenario_dicts), 50)  # Max containers
                     
                     yield ProgressUpdate(
                         completed=0,
@@ -187,8 +191,12 @@ class ModalOrchestrator:
                         status_message=f"Running {active_containers} Modal containers..."
                     )
                     
-                    # Execute scenarios and track progress
-                    for i, result in enumerate(evaluate_single_scenario.map(scenario_tuples, return_exceptions=True)):
+                    # Execute scenarios using deployed app
+                    async for result in ArcModalAPI.run_scenarios(
+                        scenarios=scenario_dicts,
+                        agent_config=agent_config.model_dump(),
+                        batch_size=10
+                    ):
                         completed_count += 1
                         
                         # Calculate cost for this scenario
@@ -208,7 +216,7 @@ class ModalOrchestrator:
                         if self.db_client and simulation_id:
                             try:
                                 outcome_data = self._prepare_outcome_data(
-                                    result, scenario_dicts[i], simulation_id, scenario_cost
+                                    result, scenario_dicts[completed_count - 1], simulation_id, scenario_cost
                                 )
                                 await self.db_client.record_outcome(outcome_data)
                             except Exception as e:
@@ -224,6 +232,76 @@ class ModalOrchestrator:
                             status_message=f"Completed {completed_count}/{total_scenarios} scenarios",
                             latest_result=result if not isinstance(result, Exception) else {"error": str(result)}
                         )
+                else:
+                    # Execute with authenticated Modal
+                    self.console.print("[bold green]Executing on Modal...[/bold green]")
+                    
+                    # Convert scenarios to Modal format
+                    scenario_dicts = []
+                    for scenario in scenarios:
+                        if hasattr(scenario, 'model_dump'):
+                            scenario_dicts.append(scenario.model_dump())
+                        elif hasattr(scenario, 'to_dict'):
+                            scenario_dicts.append(scenario.to_dict())
+                        else:
+                            scenario_dicts.append(scenario)
+
+                    # Create scenario tuples for Modal
+                    scenario_tuples = [
+                        (scenario_dict, agent_config.model_dump(), i) 
+                        for i, scenario_dict in enumerate(scenario_dicts)
+                    ]
+
+                    # Execute using Modal with progress tracking
+                    with modal_app.run():
+                        active_containers = min(len(scenario_tuples), 50)  # Max containers
+                        
+                        yield ProgressUpdate(
+                            completed=0,
+                            total=total_scenarios,
+                            current_cost=0,
+                            estimated_cost=estimated_cost,
+                            active_containers=active_containers,
+                            status_message=f"Running {active_containers} Modal containers..."
+                        )
+                        
+                        # Execute scenarios and track progress
+                        for i, result in enumerate(evaluate_single_scenario.map(scenario_tuples, return_exceptions=True)):
+                            completed_count += 1
+                            
+                            # Calculate cost for this scenario
+                            scenario_cost = 0.001  # Default cost
+                            if not isinstance(result, Exception):
+                                trajectory = result.get("trajectory", {})
+                                token_usage = trajectory.get("token_usage", {})
+                                scenario_cost = token_usage.get("total_cost", 0.001)
+                            
+                            total_cost += scenario_cost
+                            
+                            # Update active containers (simulate scaling down)
+                            remaining = total_scenarios - completed_count
+                            active_containers = min(remaining, 50) if remaining > 0 else 0
+                            
+                            # Persist to database immediately
+                            if self.db_client and simulation_id:
+                                try:
+                                    outcome_data = self._prepare_outcome_data(
+                                        result, scenario_dicts[i], simulation_id, scenario_cost
+                                    )
+                                    await self.db_client.record_outcome(outcome_data)
+                                except Exception as e:
+                                    self.console.print(f"[bold red]Database Error:[/bold red] {e}")
+                            
+                            # Yield real-time progress update
+                            yield ProgressUpdate(
+                                completed=completed_count,
+                                total=total_scenarios,
+                                current_cost=total_cost,
+                                estimated_cost=estimated_cost,
+                                active_containers=active_containers,
+                                status_message=f"Completed {completed_count}/{total_scenarios} scenarios",
+                                latest_result=result if not isinstance(result, Exception) else {"error": str(result)}
+                            )
             else:
                 # Simulate execution with database persistence
                 self.console.print("[bold yellow]Modal not available - simulating execution with database tracking[/bold yellow]")

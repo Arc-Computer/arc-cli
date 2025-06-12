@@ -399,16 +399,17 @@ def _cluster_failures(failures: List[Dict]) -> List[Dict]:
     clusters = {}
     
     for failure in failures:
-        reason = failure.get("failure_reason", "Unknown")
+        reason = failure.get("failure_reason", "Unknown") or "Unknown"
         
         # Simple pattern matching
-        if "currency" in reason.lower():
+        reason_lower = reason.lower()
+        if "currency" in reason_lower:
             pattern = "Currency Assumption Violation"
-        elif "timeout" in reason.lower():
+        elif "timeout" in reason_lower:
             pattern = "Timeout/Performance Issue"
-        elif "tool" in reason.lower():
+        elif "tool" in reason_lower:
             pattern = "Tool Execution Error"
-        elif "api" in reason.lower():
+        elif "api" in reason_lower:
             pattern = "External API Failure"
         else:
             pattern = "Other"

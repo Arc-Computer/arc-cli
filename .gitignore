@@ -154,3 +154,5 @@ output/
 cache/
 CLAUDE.md
 experiments/
+.ruff_cache/
+

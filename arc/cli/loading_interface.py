@@ -110,7 +110,7 @@ class ConfigAnalysisLoader:
         # Create summary table
         summary_table = Table(title="Agent Configuration Summary", show_header=True)
         summary_table.add_column("Property", style="info", width=20)
-        summary_table.add_column("Value", style="primary")
+        summary_table.add_column("Value", style="#3B82F6")
         
         # Basic configuration
         summary_table.add_row("Model", config.get("model", "Unknown"))
@@ -166,8 +166,28 @@ class ExecutionProgressLoader:
         return progress
     
     def display_live_metrics(self, metrics: Dict[str, Any]) -> Panel:
-        """Display live execution metrics in a panel."""
+        """Display live execution metrics in enhanced tree format."""
         content_lines = []
+        
+        # Header with rocket emoji
+        total = metrics.get("total", 0)
+        header = f"🚀 Executing {total} scenarios via Modal..."
+        content_lines.append(header)
+        
+        # Container visualization (if available)
+        if "active_containers" in metrics:
+            active = metrics["active_containers"]
+            max_containers = metrics.get("max_containers", active)
+            
+            # Container bar visualization
+            bar_width = 20
+            if max_containers > 0:
+                filled = int(bar_width * active / max_containers)
+                bar = "█" * filled + "░" * (bar_width - filled)
+            else:
+                bar = "░" * bar_width
+            
+            content_lines.append(f"├── Containers: {bar} {active}/{max_containers} active")
         
         # Progress metrics
         if "completed" in metrics and "total" in metrics:
@@ -180,38 +200,35 @@ class ExecutionProgressLoader:
             filled = int(bar_width * percentage / 100)
             bar = "█" * filled + "░" * (bar_width - filled)
             
-            content_lines.append(f"Progress:   {bar} {completed}/{total} ({percentage:.0f}%)")
+            content_lines.append(f"├── Progress:   {bar} {completed}/{total} complete ({percentage:.0f}%)")
         
         # Cost tracking
         if "cost" in metrics:
             cost = metrics["cost"]
             estimated = metrics.get("estimated_cost", cost * 1.2)
-            content_lines.append(f"Cost:       {format_currency(cost)} (estimated: {format_currency(estimated)})")
+            content_lines.append(f"├── Cost:       {format_currency(cost)} (estimated: {format_currency(estimated)})")
         
         # Time tracking
         if "elapsed_time" in metrics:
             elapsed = metrics["elapsed_time"]
             estimated_total = metrics.get("estimated_total_time", elapsed * 1.5)
-            content_lines.append(f"Time:       {self._format_duration(elapsed)} (estimated: {self._format_duration(estimated_total)})")
+            content_lines.append(f"├── Time:       {self._format_duration(elapsed)} (estimated: {self._format_duration(estimated_total)})")
         
-        # Active containers
-        if "active_containers" in metrics:
-            active = metrics["active_containers"]
-            max_containers = metrics.get("max_containers", active)
-            content_lines.append(f"Containers: {active}/{max_containers} active")
-        
-        # Failures detected
+        # Failures detected (use └── for last item)
         if "failures" in metrics:
             failures = metrics["failures"]
             status = "clustering in progress..." if failures > 0 else "none detected"
-            content_lines.append(f"Failures:   {failures} detected, {status}")
+            content_lines.append(f"└── Failures:   {failures} detected, {status}")
+        elif content_lines and content_lines[-1].startswith("├──"):
+            # Replace last ├── with └── if failures not present
+            content_lines[-1] = content_lines[-1].replace("├──", "└──")
         
         content = "\n".join(content_lines)
         
         return Panel(
             content,
-            title="[primary]Live Execution Metrics[/primary]",
-            border_style="primary",
+            title="[#3B82F6]Real-time Execution Monitoring[/#3B82F6]",
+            border_style="#3B82F6",
             padding=(0, 1)
         )
     
@@ -278,12 +295,94 @@ class ExecutionProgressLoader:
             border_style="warning",
             padding=(0, 1)
         )
+
+    def display_live_error_monitoring(self, error_data: Dict[str, Any]) -> Optional[Panel]:
+        """Display live error monitoring and recovery procedures."""
+        if not error_data.get("errors"):
+            return None
+            
+        content_lines = []
+        
+        # Error monitoring header
+        content_lines.append("🚨 Live Error Monitoring & Recovery")
+        content_lines.append("")
+        
+        # Error summary
+        total_errors = error_data.get("total_errors", 0)
+        error_rate = error_data.get("error_rate", 0)
+        content_lines.append(f"├── Total Errors: {total_errors}")
+        content_lines.append(f"├── Error Rate: {error_rate:.1f}%")
+        
+        # Top error categories
+        error_categories = error_data.get("error_categories", {})
+        if error_categories:
+            content_lines.append("├── Top Error Types:")
+            for category, count in list(error_categories.items())[:3]:
+                content_lines.append(f"│   ├── {category}: {count} occurrences")
+        
+        # Recovery procedures
+        recovery_status = error_data.get("recovery_status", "none")
+        recovery_icon = "🔄" if recovery_status == "in_progress" else "✅" if recovery_status == "completed" else "⏸️"
+        content_lines.append(f"├── Recovery Status: {recovery_icon} {recovery_status}")
+        
+        # Error clustering
+        clustering_active = error_data.get("clustering_active", False)
+        if clustering_active:
+            clusters_found = error_data.get("clusters_found", 0)
+            content_lines.append(f"└── Error Clustering: 🔍 {clusters_found} patterns identified")
+        else:
+            content_lines.append("└── Error Clustering: ⏹️ inactive")
+        
+        content = "\n".join(content_lines)
+        
+        return Panel(
+            content,
+            title="[error]Error Monitoring & Recovery[/error]",
+            border_style="error",
+            padding=(0, 1)
+        )
     
     def _format_duration(self, seconds: float) -> str:
         """Format duration in MM:SS format."""
         minutes = int(seconds // 60)
         seconds = int(seconds % 60)
         return f"{minutes:02d}:{seconds:02d}"
+
+    def display_execution_timeline(self, timeline_data: Dict[str, Any]) -> Panel:
+        """Display execution timeline with performance metrics."""
+        content_lines = []
+        
+        # Timeline header
+        content_lines.append("📊 Execution Timeline & Performance")
+        content_lines.append("")
+        
+        # Key performance metrics
+        throughput = timeline_data.get("scenarios_per_minute", 0)
+        avg_latency = timeline_data.get("avg_scenario_time", 0)
+        speedup_factor = timeline_data.get("speedup_factor", 1)
+        
+        content_lines.append(f"├── Throughput:     {throughput:.1f} scenarios/min")
+        content_lines.append(f"├── Avg Latency:    {avg_latency:.2f}s per scenario")
+        content_lines.append(f"├── Speedup Factor: {speedup_factor:.1f}x vs sequential")
+        
+        # Container utilization over time
+        if "container_efficiency" in timeline_data:
+            efficiency = timeline_data["container_efficiency"]
+            content_lines.append(f"├── Container Efficiency: {efficiency:.1f}%")
+        
+        # Recent performance trend
+        trend = timeline_data.get("performance_trend", "stable")
+        trend_icon = "📈" if trend == "improving" else "📉" if trend == "degrading" else "➡️"
+        content_lines.append(f"└── Performance Trend: {trend_icon} {trend}")
+        
+        content = "\n".join(content_lines)
+        
+        return Panel(
+            content,
+            title="[#10B981]Performance Analytics[/#10B981]",
+            border_style="#10B981",
+            padding=(0, 1)
+        )
 
 
 class StreamingResultsDisplay:

@@ -25,6 +25,10 @@ class AgentConfigParser:
         "max_tokens": ["max_tokens", "max_length", "token_limit"],
         "top_p": ["top_p", "nucleus_sampling"],
         "assumptions": ["assumptions", "constraints", "rules", "guidelines"],
+        "job": ["job", "job_description", "purpose", "objective", "mission"],
+        "validation_rules": ["validation_rules", "validation", "rules", "checks"],
+        "name": ["name", "agent_name", "assistant_name"],
+        "description": ["description", "desc", "about"],
     }
     
     # Minimum required fields for a valid agent config
@@ -115,15 +119,15 @@ class AgentConfigParser:
         
         return normalized
     
-    def _normalize_tools(self, tools: Any) -> List[str]:
+    def _normalize_tools(self, tools: Any) -> List[Union[str, Dict[str, Any]]]:
         """
-        Normalize tools to a list of tool names.
+        Normalize tools preserving full definitions when available.
         
         Args:
             tools: Tools in various formats (list of strings, list of dicts, etc.)
             
         Returns:
-            List of tool names
+            List of tool definitions (either strings or full dict definitions)
         """
         if not tools:
             return []
@@ -139,20 +143,28 @@ class AgentConfigParser:
         normalized_tools = []
         for tool in tools:
             if isinstance(tool, str):
-                # Simple string tool name
+                # Simple string tool name - preserve as is
                 normalized_tools.append(tool)
             elif isinstance(tool, dict):
-                # Tool as dictionary - extract name
+                # Tool as dictionary - preserve full definition
                 if "name" in tool:
-                    normalized_tools.append(tool["name"])
+                    # Already has proper structure
+                    normalized_tools.append(tool)
                 elif "tool" in tool:
-                    normalized_tools.append(tool["tool"])
+                    # Rename 'tool' to 'name' for consistency
+                    tool_def = tool.copy()
+                    tool_def["name"] = tool_def.pop("tool")
+                    normalized_tools.append(tool_def)
                 else:
                     # Try to use the first key as tool name
                     if tool:
                         tool_name = list(tool.keys())[0]
-                        normalized_tools.append(tool_name)
-                        self.warnings.append(f"Guessed tool name '{tool_name}' from dict keys")
+                        # Create a normalized structure
+                        normalized_tools.append({
+                            "name": tool_name,
+                            "definition": tool[tool_name]
+                        })
+                        self.warnings.append(f"Restructured tool '{tool_name}' from nested format")
             else:
                 self.warnings.append(f"Skipping tool with unexpected type: {type(tool)}")
         
@@ -200,6 +212,32 @@ class AgentConfigParser:
         """Get any warnings from the last parse operation."""
         return self.warnings.copy()
     
+    def get_tool_names(self, config: Optional[Dict[str, Any]] = None) -> List[str]:
+        """
+        Extract just the tool names from the configuration.
+        
+        Args:
+            config: Configuration to analyze (uses last parsed if not provided)
+            
+        Returns:
+            List of tool names as strings
+        """
+        if config is None:
+            config = self.last_parsed_config
+            if config is None:
+                raise ValueError("No configuration to analyze")
+        
+        tools = config.get("tools", [])
+        tool_names = []
+        
+        for tool in tools:
+            if isinstance(tool, str):
+                tool_names.append(tool)
+            elif isinstance(tool, dict) and "name" in tool:
+                tool_names.append(tool["name"])
+        
+        return tool_names
+    
     def extract_capabilities(self, config: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """
         Extract high-level capabilities from the configuration.
@@ -215,11 +253,18 @@ class AgentConfigParser:
             if config is None:
                 raise ValueError("No configuration to analyze")
         
+        # Get tool names for categorization
+        tool_names = self.get_tool_names(config)
+        
         capabilities = {
             "domains": self._infer_domains(config),
-            "tool_categories": self._categorize_tools(config.get("tools", [])),
+            "tool_categories": self._categorize_tools(tool_names),
             "behavioral_traits": self._extract_behavioral_traits(config),
             "complexity_level": self._estimate_complexity(config),
+            "tools": config.get("tools", []),  # Include full tool definitions
+            "assumptions": config.get("assumptions", []),
+            "job": config.get("job", ""),
+            "validation_rules": config.get("validation_rules", []),
         }
         
         return capabilities
@@ -229,7 +274,7 @@ class AgentConfigParser:
         domains = []
         
         prompt = config.get("system_prompt", "").lower()
-        tools = [t.lower() for t in config.get("tools", [])]
+        tool_names = [t.lower() for t in self.get_tool_names(config)]
         
         # Domain keywords mapping
         domain_indicators = {
@@ -244,7 +289,7 @@ class AgentConfigParser:
         for domain, keywords in domain_indicators.items():
             if any(keyword in prompt for keyword in keywords):
                 domains.append(domain)
-            elif any(any(keyword in tool for keyword in keywords) for tool in tools):
+            elif any(any(keyword in tool for keyword in keywords) for tool in tool_names):
                 domains.append(domain)
         
         return list(set(domains)) or ["general"]

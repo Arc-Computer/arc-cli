@@ -5,45 +5,45 @@ import os
 import time
 from datetime import datetime
 from pathlib import Path
-from typing import Any, List, Dict, Optional
+from typing import Any
 from uuid import uuid4
 
 import click
-import yaml
+from rich.panel import Panel
 from rich.progress import (
+    BarColumn,
     Progress,
     SpinnerColumn,
     TextColumn,
-    BarColumn,
-    TimeRemainingColumn
+    TimeRemainingColumn,
 )
-from rich.panel import Panel
 from rich.table import Table
 
+from arc.analysis.assumption_detector import AssumptionDetector
+from arc.analysis.funnel_analyzer import FunnelAnalyzer
+from arc.cli.loading_interface import ConfigAnalysisLoader, ExecutionProgressLoader
 from arc.cli.utils import (
     ArcConsole,
     CLIState,
-    RunResult,
     HybridState,
+    RunResult,
     db_manager,
     format_error,
     format_success,
-    format_warning
+    format_warning,
 )
 from arc.cli.utils.error_helpers import categorize_error
-from arc.cli.loading_interface import (
-    ConfigAnalysisLoader,
-    ExecutionProgressLoader
+from arc.cli.utils.modal_auth import (
+    check_modal_quota,
+    get_modal_auth_instructions,
+    setup_modal_auth,
 )
-from arc.analysis.funnel_analyzer import FunnelAnalyzer
-from arc.analysis.assumption_detector import AssumptionDetector
-from arc.ingestion.parser import AgentConfigParser
-from arc.ingestion.normalizer import ConfigNormalizer
-from arc.scenarios.generator import ScenarioGenerator
 from arc.core.models.scenario import Scenario
 from arc.core.models.config import AgentConfig
+from arc.ingestion.normalizer import ConfigNormalizer
+from arc.ingestion.parser import AgentConfigParser
+from arc.scenarios.generator import ScenarioGenerator
 from arc.simulation.modal_orchestrator import ModalOrchestrator, ProgressUpdate
-
 
 console = ArcConsole()
 # Will be initialized with database connection if available
@@ -68,57 +68,105 @@ async def _initialize_state():
 
 
 @click.command()
-@click.argument('config_path', type=click.Path(exists=True))
-@click.option('--scenarios', '-s', default=50, help='Number of scenarios to generate (default: 50)')
-@click.option('--json', 'json_output', is_flag=True, help='Output JSON instead of rich text')
-@click.option('--no-confirm', is_flag=True, help='Skip cost confirmation prompt')
-@click.option('--pattern-ratio', default=0.7, type=click.FloatRange(0.0, 1.0), help='Ratio of pattern-based scenarios (0-1)')
+@click.argument("config_path", type=click.Path(exists=True))
+@click.option(
+    "--scenarios",
+    "-s",
+    default=50,
+    help="Number of scenarios to generate (default: 50)",
+)
+@click.option(
+    "--json", "json_output", is_flag=True, help="Output JSON instead of rich text"
+)
+@click.option("--no-confirm", is_flag=True, help="Skip cost confirmation prompt")
+@click.option(
+    "--pattern-ratio",
+    default=0.7,
+    type=click.FloatRange(0.0, 1.0),
+    help="Ratio of pattern-based scenarios (0-1)",
+)
 @click.option('--no-modal', is_flag=True, help='Disable Modal execution and use simulation instead')
-def run(config_path: str, scenarios: int, json_output: bool, no_confirm: bool, pattern_ratio: float, no_modal: bool):
+def run(
+    config_path: str,
+    scenarios: int,
+    json_output: bool,
+    no_confirm: bool,
+    pattern_ratio: float,
+    no_modal: bool,
+):
     """Test an agent configuration with generated scenarios.
-    
+
     This command:
     1. Parses your agent configuration
-    2. Generates test scenarios (currency assumptions + general)  
+    2. Generates test scenarios (currency assumptions + general)
     3. Executes scenarios in parallel using Modal
     4. Reports reliability score and failures
-    
+
     Example:
         arc run finance_agent_v1.yaml
     """
+    # Run the async implementation in a single event loop
+    try:
+        asyncio.run(
+            _run_impl(config_path, scenarios, json_output, no_confirm, pattern_ratio, no_modal)
+        )
+    except KeyboardInterrupt:
+        console.print("\nRun cancelled by user.", style="warning")
+        raise click.exceptions.Exit(130) from None
+    except Exception as e:
+        if json_output:
+            import json
+
+            print(json.dumps({"error": str(e)}, indent=2))
+        else:
+            console.print(format_error(f"Run failed: {str(e)}"))
+        raise click.exceptions.Exit(1) from e
+
+
+async def _run_impl(
+    config_path: str,
+    scenarios: int,
+    json_output: bool,
+    no_confirm: bool,
+    pattern_ratio: float,
+    no_modal: bool,
+):
+    """Async implementation of the run command."""
+    global state
+
     # Initialize state with database connection
-    db_available = asyncio.run(_initialize_state())
-    
-    config_path_obj = Path(config_path)
+    db_connected = await _initialize_state()
+    if not json_output and db_connected:
+        console.print("Database connection established", style="success")
+
+    config_path = Path(config_path)
     run_id = f"run_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid4().hex[:8]}"
-    
+
     if not json_output:
         console.print()
-        console.print(Panel.fit(
-            "[bright_blue]Arc: Proactive Capability Assurance[/bright_blue]",
-            border_style="bright_blue"
-        ))
+        console.print(
+            Panel.fit(
+                "[primary]Arc: Proactive Capability Assurance[/primary]",
+                border_style="primary",
+            )
+        )
         console.print()
-    
+
     try:
         # Step 1: Enhanced Configuration Analysis with Loading
         parser = AgentConfigParser()
         normalizer = ConfigNormalizer()
-        
+
         if not json_output:
             # Use professional loading interface for config analysis
             config_loader = ConfigAnalysisLoader(console)
-            agent_profile = asyncio.run(
-                config_loader.analyze_config_with_progress(
-                    str(config_path),
-                    parser,
-                    normalizer
-                )
+            agent_profile = await config_loader.analyze_config_with_progress(
+                str(config_path), parser, normalizer
             )
-            
+
             # Display professional config summary
             config_loader.display_config_summary(agent_profile)
-            
+
             # Extract components from agent profile
             normalized_config = agent_profile["configuration"]
             capabilities = agent_profile["capabilities"]
@@ -127,103 +175,109 @@ def run(config_path: str, scenarios: int, json_output: bool, no_confirm: bool, p
             parsed_config = parser.parse(config_path)
             normalized_config = normalizer.normalize(parsed_config)
             capabilities = parser.extract_capabilities(parsed_config)
-            
+
             agent_profile = {
                 "configuration": normalized_config,
                 "capabilities": capabilities,
-                "normalizer_enhancements": []
+                "normalizer_enhancements": [],
             }
-        
-        # Create AgentConfig from normalized configuration
-        agent_config = AgentConfig.model_validate(normalized_config)
-        
+
         # Step 2: Initialize Modal orchestrator if available
-        use_modal = not no_modal and _check_modal_available()
+        use_modal = not no_modal and await _check_modal_available()
         if use_modal:
             orchestrator = ModalOrchestrator(
-                db_client=db_manager.get_client() if db_available else None,
+                db_client=db_manager.get_client() if db_connected else None,
                 console=console
             )
             estimated_cost = orchestrator._estimate_execution_cost(scenarios, agent_config.model)
         else:
             orchestrator = None
             estimated_cost = _estimate_cost(scenarios, normalized_config["model"])
-        
-        if not json_output and not no_confirm and estimated_cost > state.config.get("cost_warning_threshold", 0.10):
+
+        if (
+            not json_output
+            and not no_confirm
+            and estimated_cost > state.config.get("cost_warning_threshold", 0.10)
+        ):
             console.print(format_warning(f"Estimated cost: ${estimated_cost:.4f}"))
             if not click.confirm("Continue with this run?"):
                 console.print("Run cancelled.", style="muted")
                 return
-        
+
         # Step 3: Generate scenarios
         if not json_output:
             console.print_header(f"Generating {scenarios} test scenarios")
             console.print(f"Pattern-based: {int(pattern_ratio * 100)}%")
             console.print(f"LLM-generated: {int((1 - pattern_ratio) * 100)}%")
             console.print()
-        
+
         # Run async scenario generation
-        generated_scenarios = asyncio.run(
-            _generate_scenarios_async(
-                config_path=str(config_path_obj),
-                count=scenarios,
-                pattern_ratio=pattern_ratio,
-                capabilities=capabilities,
-                json_output=json_output
-            )
+        generated_scenarios = await _generate_scenarios_async(
+            config_path=str(config_path),
+            count=scenarios,
+            pattern_ratio=pattern_ratio,
+            capabilities=capabilities,
+            json_output=json_output,
         )
-        
+
         if not json_output:
-            console.print(format_success(f"Generated {len(generated_scenarios)} scenarios"))
+            console.print(
+                format_success(f"Generated {len(generated_scenarios)} scenarios")
+            )
             _print_scenario_summary(generated_scenarios)
             console.print()
-        
+
         # Step 4: Execute scenarios with streaming analysis
         if not json_output:
             console.print_header("Executing scenarios with real-time intelligence")
-        
+
         # Execute with streaming analysis and intelligence
-        start_time = time.time()
-        results, execution_time, actual_cost = asyncio.run(
-            _execute_with_streaming_analysis(
+        if use_modal and orchestrator:
+            results, execution_time, actual_cost = await _execute_with_orchestrator(
                 scenarios=generated_scenarios,
-                agent_config=normalized_config,
+                agent_config=agent_config,
                 agent_profile=agent_profile,
                 orchestrator=orchestrator,
                 run_id=run_id,
-                json_output=json_output
+                json_output=json_output,
             )
-        )
-        
+        else:
+            results, execution_time, actual_cost = await _execute_with_streaming_analysis(
+                scenarios=generated_scenarios,
+                agent_config=normalized_config,
+                agent_profile=agent_profile,
+                json_output=json_output,
+            )
+
         # Fallback cost estimation if not provided
         if actual_cost == 0.0:
             actual_cost = estimated_cost
-        
+
         execution_time = time.time() - start_time
         
         # Step 5: Calculate results
         success_count = sum(1 for r in results if r.get("success"))
         failure_count = len(results) - success_count
         reliability_score = success_count / len(results) if results else 0
-        
+
         # Analyze assumption violations detected during streaming
         assumption_violations = []
         currency_failures = []
-        
+
         for r in results:
             if not r["success"]:
                 # Check for currency failures in failure reason
                 if "currency" in r.get("failure_reason", "").lower():
                     currency_failures.append(r)
-                
+
                 # Collect assumption violations from AI analysis
                 violations = r.get("assumptions_detected", [])
                 assumption_violations.extend(violations)
-        
+
         # Save run results
         final_run_result = RunResult(
             run_id=run_id,
-            config_path=str(config_path_obj),
+            config_path=str(config_path),
             timestamp=datetime.now(),
             scenario_count=len(generated_scenarios),
             success_count=success_count,
@@ -231,29 +285,34 @@ def run(config_path: str, scenarios: int, json_output: bool, no_confirm: bool, p
             reliability_score=reliability_score,
             execution_time=execution_time,
             total_cost=actual_cost,
-            scenarios=[s.to_dict() for s in generated_scenarios],
+            scenarios=[
+                s.to_dict() if hasattr(s, "to_dict") else s for s in generated_scenarios
+            ],
             results=results,
-            failures=[r for r in results if not r.get("success")]
+            failures=[r for r in results if not r["success"]],
         )
-        
+
         state.save_run(final_run_result)
-        
+
         # Display results
         if json_output:
             import json
+
             print(json.dumps(final_run_result.to_dict(), indent=2))
         else:
             console.print()
-            console.print(Panel.fit(
-                "[success]✓ Found capability issues BEFORE production[/success]",
-                border_style="success"
-            ))
+            console.print(
+                Panel.fit(
+                    "[success]✓ Found capability issues BEFORE production[/success]",
+                    border_style="success",
+                )
+            )
             console.print()
-            
+
             # Results table
             table = Table(show_header=False, box=None)
             table.add_column("Metric", style="muted")
-            table.add_column("Value", style="bold green")
+            table.add_column("Value", style="bright_cyan")
             
             table.add_row("Overall Reliability", f"{reliability_score:.1%} ({success_count}/{len(results)} scenarios)")
             
@@ -263,24 +322,32 @@ def run(config_path: str, scenarios: int, json_output: bool, no_confirm: bool, p
                 for violation in assumption_violations:
                     vtype = violation.get("type", "unknown")
                     violation_types[vtype] = violation_types.get(vtype, 0) + 1
-                
+
                 # Show most common violation type
                 most_common = max(violation_types.items(), key=lambda x: x[1])
-                table.add_row("Primary Assumption Violation", f"{most_common[0].title()}: {most_common[1]} occurrences", style="error")
-            
+                table.add_row(
+                    "Primary Assumption Violation",
+                    f"{most_common[0].title()}: {most_common[1]} occurrences",
+                    style="error",
+                )
+
             if currency_failures:
-                table.add_row("Currency Assumption Violations", f"{len(currency_failures)} failures", style="error")
-            
+                table.add_row(
+                    "Currency Assumption Violations",
+                    f"{len(currency_failures)} failures",
+                    style="error",
+                )
+
             table.add_row("Time to insight", f"{execution_time:.1f} seconds")
             table.add_row("Actual cost", f"${actual_cost:.4f}")
-            
+
             console.print(table)
             console.print()
-            
+
             # Display top assumption violations with business impact
             if assumption_violations:
                 console.print_header("Key Assumption Violations Discovered")
-                
+
                 # Group by type and show top 3
                 violation_groups = {}
                 for violation in assumption_violations:
@@ -288,85 +355,104 @@ def run(config_path: str, scenarios: int, json_output: bool, no_confirm: bool, p
                     if vtype not in violation_groups:
                         violation_groups[vtype] = []
                     violation_groups[vtype].append(violation)
-                
-                for i, (vtype, violations) in enumerate(list(violation_groups.items())[:3]):
+
+                for _i, (vtype, violations) in enumerate(
+                    list(violation_groups.items())[:3]
+                ):
                     violation = violations[0]  # Show representative violation
-                    console.print(console.format_assumption(
-                        vtype.title(),
-                        violation.get("description", "No description"),
-                        violation.get("business_impact", "Unknown impact")
-                    ))
-                    console.print(f"[muted]  → Fix: {violation.get('suggested_fix', 'No suggestion available')}[/muted]")
+                    console.print(
+                        console.format_assumption(
+                            vtype.title(),
+                            violation.get("description", "No description"),
+                            violation.get("business_impact", "Unknown impact"),
+                        )
+                    )
+                    console.print(
+                        f"[muted]  → Fix: {violation.get('suggested_fix', 'No suggestion available')}[/muted]"
+                    )
                     console.print()
                 console.print()
-            
-            console.print("Run [info]arc analyze[/info] to see detailed breakdown", style="muted")
-            console.print("Run [info]arc recommend[/info] for specific fixes", style="muted")
+
+            console.print(
+                "Run [info]arc analyze[/info] to see detailed breakdown", style="muted"
+            )
+            console.print(
+                "Run [info]arc recommend[/info] for specific fixes", style="muted"
+            )
             console.print()
-    
+
     except Exception as e:
         if json_output:
             import json
+
             print(json.dumps({"error": str(e)}, indent=2))
         else:
             console.print(format_error(f"Run failed: {str(e)}"))
-            console.print("\nTry: [info]arc validate {config_path}[/info] to check your configuration", style="muted")
-        raise click.exceptions.Exit(1)
+            console.print(
+                f"\nTry: [info]arc validate {config_path}[/info] to check your configuration",
+                style="muted",
+            )
+        raise click.exceptions.Exit(1) from e
+    finally:
+        # Ensure proper cleanup of database connections
+        try:
+            await db_manager.close()
+        except Exception:
+            pass  # Ignore cleanup errors
 
 
 async def _generate_scenarios_async(
     config_path: str,
     count: int,
     pattern_ratio: float,
-    capabilities: Dict[str, Any],
-    json_output: bool
-) -> List[Scenario]:
+    capabilities: dict[str, Any],
+    json_output: bool,
+) -> list[Scenario]:
     """Generate scenarios asynchronously."""
     try:
         # Check if finance domain for currency scenarios
         is_finance = "finance" in capabilities.get("domains", [])
-        
+
         if is_finance and not json_output:
-            console.print("Detected finance domain - including currency assumption scenarios", style="info")
-        
+            console.print(
+                "Detected finance domain - including currency assumption scenarios",
+                style="info",
+            )
+
         # Initialize generator
         generator = ScenarioGenerator(
             agent_config_path=config_path,
             use_patterns=True,
-            quality_threshold=2.0  # Lower threshold for more scenarios
+            quality_threshold=2.0,  # Lower threshold for more scenarios
         )
-        
+
         # Generate scenarios with currency focus for first 15
         if count >= 50:
             # Generate 15 currency scenarios + 35 general scenarios
             currency_scenarios = await generator.generate_scenarios_batch(
-                count=15,
-                pattern_ratio=pattern_ratio,
-                currency_focus=True
+                count=15, pattern_ratio=pattern_ratio, currency_focus=True
             )
-            
+
             general_scenarios = await generator.generate_scenarios_batch(
-                count=count - 15,
-                pattern_ratio=pattern_ratio,
-                currency_focus=False
+                count=count - 15, pattern_ratio=pattern_ratio, currency_focus=False
             )
-            
+
             scenarios = currency_scenarios + general_scenarios
         else:
             # Generate all as general scenarios
             scenarios = await generator.generate_scenarios_batch(
-                count=count,
-                pattern_ratio=pattern_ratio,
-                currency_focus=False
+                count=count, pattern_ratio=pattern_ratio, currency_focus=False
             )
-        
+
         return scenarios
-    
-    except Exception as e:
+
+    except Exception:
         # For now, return mock scenarios if generation fails
         if not json_output:
-            console.print(format_warning("Failed to generate scenarios, using mock data"))
-        
+            console.print(
+                format_warning("Failed to generate scenarios, using mock data")
+            )
+
         mock_scenarios = []
         for i in range(count):
             scenario = {
@@ -374,10 +460,10 @@ async def _generate_scenarios_async(
                 "task_prompt": f"Test scenario {i}",
                 "expected_tools": ["calculator", "web_search"],
                 "complexity_level": "medium",
-                "domain": "finance" if i < 15 else "general"
+                "domain": "finance" if i < 15 else "general",
             }
             mock_scenarios.append(scenario)
-        
+
         return mock_scenarios
 
 
@@ -391,31 +477,55 @@ def _estimate_cost(scenario_count: int, model: str) -> float:
         "openai/gpt-4.1": {"cost_per_1k_in": 0.00200, "cost_per_1k_out": 0.00800},
         "openai/gpt-4.1-mini": {"cost_per_1k_in": 0.00040, "cost_per_1k_out": 0.00160},
         "openai/o3-pro": {"cost_per_1k_in": 0.02, "cost_per_1k_out": 0.08},
-        
         # Anthropic
-        "anthropic/claude-opus-4": {"cost_per_1k_in": 0.01500, "cost_per_1k_out": 0.07500},
-        "anthropic/claude-sonnet-4": {"cost_per_1k_in": 0.00300, "cost_per_1k_out": 0.01500},
-        "anthropic/claude-3.5-haiku": {"cost_per_1k_in": 0.00080, "cost_per_1k_out": 0.00400},
-        
+        "anthropic/claude-opus-4": {
+            "cost_per_1k_in": 0.01500,
+            "cost_per_1k_out": 0.07500,
+        },
+        "anthropic/claude-sonnet-4": {
+            "cost_per_1k_in": 0.00300,
+            "cost_per_1k_out": 0.01500,
+        },
+        "anthropic/claude-3.5-haiku": {
+            "cost_per_1k_in": 0.00080,
+            "cost_per_1k_out": 0.00400,
+        },
         # Google
-        "google/gemini-2.5-pro-preview": {"cost_per_1k_in": 0.00125, "cost_per_1k_out": 0.01000},
-        "google/gemini-2.5-flash-preview-05-20": {"cost_per_1k_in": 0.00015, "cost_per_1k_out": 0.00060},
-        
+        "google/gemini-2.5-pro-preview": {
+            "cost_per_1k_in": 0.00125,
+            "cost_per_1k_out": 0.01000,
+        },
+        "google/gemini-2.5-flash-preview-05-20": {
+            "cost_per_1k_in": 0.00015,
+            "cost_per_1k_out": 0.00060,
+        },
         # Meta (Llama 4)
-        "meta-llama/llama-4-maverick": {"cost_per_1k_in": 0.00015, "cost_per_1k_out": 0.00060},
-        "meta-llama/llama-4-scout": {"cost_per_1k_in": 0.00008, "cost_per_1k_out": 0.00030},
-        
+        "meta-llama/llama-4-maverick": {
+            "cost_per_1k_in": 0.00015,
+            "cost_per_1k_out": 0.00060,
+        },
+        "meta-llama/llama-4-scout": {
+            "cost_per_1k_in": 0.00008,
+            "cost_per_1k_out": 0.00030,
+        },
         # Mistral
-        "mistralai/mistral-medium-3": {"cost_per_1k_in": 0.00040, "cost_per_1k_out": 0.00200},
-        
+        "mistralai/mistral-medium-3": {
+            "cost_per_1k_in": 0.00040,
+            "cost_per_1k_out": 0.00200,
+        },
         # Cohere
         "cohere/command-a": {"cost_per_1k_in": 0.00250, "cost_per_1k_out": 0.01000},
-        
         # DeepSeek
-        "deepseek/deepseek-chat-v3-0324": {"cost_per_1k_in": 0.00030, "cost_per_1k_out": 0.00088},
-        "deepseek/deepseek-r1-0528": {"cost_per_1k_in": 0.00050, "cost_per_1k_out": 0.00215},
+        "deepseek/deepseek-chat-v3-0324": {
+            "cost_per_1k_in": 0.00030,
+            "cost_per_1k_out": 0.00088,
+        },
+        "deepseek/deepseek-r1-0528": {
+            "cost_per_1k_in": 0.00050,
+            "cost_per_1k_out": 0.00215,
+        },
     }
-    
+
     # Calculate cost per scenario (assuming 1k input tokens + 0.5k output tokens)
     if model in MODELS_PRICING:
         pricing = MODELS_PRICING[model]
@@ -425,29 +535,35 @@ def _estimate_cost(scenario_count: int, model: str) -> float:
     else:
         # Default fallback for unknown models
         cost_per_scenario = 0.0005
-    
+
     return scenario_count * cost_per_scenario
 
 
-def _print_scenario_summary(scenarios: List[Any]) -> None:
+def _print_scenario_summary(scenarios: list[Any]) -> None:
     """Print summary of generated scenarios."""
     # Count by domain
     domains = {}
     for s in scenarios:
-        domain = s.get("domain", "general") if isinstance(s, dict) else getattr(s, "inferred_domain", "general")
+        domain = (
+            s.get("domain", "general")
+            if isinstance(s, dict)
+            else getattr(s, "inferred_domain", "general")
+        )
         domains[domain] = domains.get(domain, 0) + 1
-    
+
     if domains:
         console.print("Scenario breakdown:", style="muted")
         for domain, count in sorted(domains.items(), key=lambda x: x[1], reverse=True):
             console.print(f"  {domain}: {count} scenarios", style="muted")
 
 
-def _simulate_execution(scenarios: List[Any], json_output: bool) -> tuple[List[Dict[str, Any]], float]:
+def _simulate_execution(
+    scenarios: list[Any], json_output: bool
+) -> tuple[list[dict[str, Any]], float]:
     """Simulate scenario execution with mock results."""
     results = []
     start_time = time.time()
-    
+
     if not json_output:
         with Progress(
             SpinnerColumn(),
@@ -458,114 +574,110 @@ def _simulate_execution(scenarios: List[Any], json_output: bool) -> tuple[List[D
             console=console,
         ) as progress:
             task = progress.add_task("Executing scenarios...", total=len(scenarios))
-            
+
             for i, scenario in enumerate(scenarios):
                 # Simulate execution time
                 time.sleep(0.02)
-                
+
                 # Generate mock result
                 is_currency = "currency" in str(scenario).lower()
-                success = not (is_currency and i < 15)  # First 15 currency scenarios fail
-                
+                success = not (
+                    is_currency and i < 15
+                )  # First 15 currency scenarios fail
+
                 result = {
-                    "scenario_id": scenario.get("scenario_id", f"scenario_{i}") if isinstance(scenario, dict) else getattr(scenario, "scenario_id", f"scenario_{i}"),
+                    "scenario_id": scenario.get("scenario_id", f"scenario_{i}")
+                    if isinstance(scenario, dict)
+                    else getattr(scenario, "scenario_id", f"scenario_{i}"),
                     "success": success,
                     "execution_time": 0.5 + (i * 0.01),
-                    "failure_reason": "Currency assumption violation: Expected multi-currency support" if not success else None
+                    "failure_reason": "Currency assumption violation: Expected multi-currency support"
+                    if not success
+                    else None,
                 }
                 results.append(result)
-                
+
                 progress.update(task, advance=1)
     else:
         # Silent execution for JSON output
         for i, scenario in enumerate(scenarios):
             is_currency = "currency" in str(scenario).lower()
             success = not (is_currency and i < 15)
-            
+
             result = {
-                "scenario_id": scenario.get("scenario_id", f"scenario_{i}") if isinstance(scenario, dict) else getattr(scenario, "scenario_id", f"scenario_{i}"),
+                "scenario_id": scenario.get("scenario_id", f"scenario_{i}")
+                if isinstance(scenario, dict)
+                else getattr(scenario, "scenario_id", f"scenario_{i}"),
                 "success": success,
                 "execution_time": 0.5 + (i * 0.01),
-                "failure_reason": "Currency assumption violation: Expected multi-currency support" if not success else None
+                "failure_reason": "Currency assumption violation: Expected multi-currency support"
+                if not success
+                else None,
             }
             results.append(result)
-    
+
     execution_time = time.time() - start_time
     return results, execution_time
 
 
-def _check_modal_available() -> bool:
-    """Check if Modal is installed and configured."""
+async def _check_modal_available(max_retries: int = 3) -> bool:
+    """Check if Modal is installed and configured with retry logic.
+
+    Args:
+        max_retries: Maximum number of connection attempts
+
+    Returns:
+        True if Modal is available and configured, False otherwise
+    """
     try:
         import modal
-        # Check for both Modal tokens  
-        token_id = os.environ.get("MODAL_TOKEN_ID")
-        token_secret = os.environ.get("MODAL_TOKEN_SECRET")
-        
-        if not token_id or not token_secret:
+
+        # First check if Modal package is properly installed
+        try:
+            # Test import of required components
+            from arc.sandbox.engine.simulator import app as modal_app
+        except ImportError as e:
+            console.print(
+                format_warning(f"Modal components not properly installed: {e}")
+            )
             return False
-            
+
+        # Try to setup Modal authentication (handles multiple methods)
+        auth_configured = setup_modal_auth()
+
+        if not auth_configured:
+            # Check if we might be in a deployed environment with different auth
+            if os.environ.get("ARC_MODAL_APP_ID") or os.environ.get("MODAL_ENVIRONMENT"):
+                console.print(format_warning("Modal authentication may be handled by deployment"))
+                return True
+            console.print(format_warning("Modal not authenticated"))
+            console.print(get_modal_auth_instructions())
+            return False
+
+        # Check if using shared account and warn
+        is_shared, warning = check_modal_quota()
+        if is_shared and warning:
+            console.print(format_warning(warning))
+
+        # Modal auth is configured, we can proceed
+        # Don't test connection here - let the actual execution handle any issues
         return True
     except ImportError:
+        console.print(
+            format_warning("Modal not installed. Run 'pip install modal' to install")
+        )
         return False
 
 
-async def _execute_with_streaming_analysis(
-    scenarios: List[Scenario],
-    agent_config: Dict[str, Any],
-    agent_profile: Dict[str, Any],
+async def _execute_with_orchestrator(
+    scenarios: list[Scenario],
+    agent_config: AgentConfig,
+    agent_profile: dict[str, Any],
     orchestrator: ModalOrchestrator,
     run_id: str,
-    json_output: bool
-) -> tuple[List[Dict[str, Any]], float, float]:
-    """
-    Execute scenarios with real-time streaming analysis and intelligence.
-    
-    Integrates:
-    - ExecutionProgressLoader for live metrics
-    - FunnelAnalyzer for progressive capability analysis
-    - AssumptionDetector for real-time violation detection
-    
-    Returns:
-        Tuple of (results, execution_time, total_cost)
-    """
-    # Initialize intelligence components
-    funnel_analyzer = FunnelAnalyzer()
-    assumption_detector = AssumptionDetector()
-    execution_loader = ExecutionProgressLoader(console)
-    
-    # Check if we should use Modal orchestrator
-    use_modal = orchestrator is not None and _check_modal_available()
-    
-    if use_modal:
-        # Execute with Modal + streaming analysis (using orchestrator)
-        return await _execute_modal_with_streaming(
-            scenarios, agent_config, agent_profile,
-            funnel_analyzer, assumption_detector, execution_loader, 
-            orchestrator, run_id, json_output
-        )
-    else:
-        if not json_output:
-            console.print("[warning]Modal not available - using simulation mode[/warning]")
-        # Execute simulation with streaming analysis
-        return await _execute_simulation_with_streaming(
-            scenarios, agent_config, agent_profile,
-            funnel_analyzer, assumption_detector, execution_loader, json_output
-        )
-
-
-async def _execute_modal_with_streaming(
-    scenarios: List[Scenario],
-    agent_config: Dict[str, Any],
-    agent_profile: Dict[str, Any],
-    funnel_analyzer: FunnelAnalyzer,
-    assumption_detector: AssumptionDetector,
-    execution_loader: ExecutionProgressLoader,
-    orchestrator: ModalOrchestrator,
-    run_id: str,
-    json_output: bool
-) -> tuple[List[Dict[str, Any]], float, float]:
-    """Execute Modal scenarios with real-time streaming intelligence using orchestrator."""
+    json_output: bool,
+) -> tuple[list[dict[str, Any]], float, float]:
+    """Execute scenarios using the Modal orchestrator with real-time progress."""
     start_time = time.time()
     
     if not json_output:
@@ -573,19 +685,15 @@ async def _execute_modal_with_streaming(
         console.print()
     
     try:
-        # Convert agent_config dict to AgentConfig object if needed
-        if isinstance(agent_config, dict):
-            agent_config_obj = AgentConfig.model_validate(agent_config)
-        else:
-            agent_config_obj = agent_config
+        # Initialize intelligence components
+        assumption_detector = AssumptionDetector()
         
         # Use the orchestrator with real-time progress display
         results = []
         total_cost = 0.0
-        completed_trajectories = []
         
         async for progress_update in orchestrator.execute_with_persistence(
-            agent_config=agent_config_obj,
+            agent_config=agent_config,
             scenarios=scenarios,
             run_id=run_id
         ):
@@ -608,10 +716,6 @@ async def _execute_modal_with_streaming(
                     agent_profile=agent_profile
                 )
                 results.append(result)
-                
-                if result.get("trajectory"):
-                    completed_trajectories.append(result["trajectory"])
-                
                 total_cost = progress_update.current_cost
         
         if not json_output:
@@ -620,87 +724,429 @@ async def _execute_modal_with_streaming(
             console.print()
         
         execution_time = time.time() - start_time
+        return results, execution_time, total_cost
         
     except Exception as e:
         if not json_output:
             console.print()  # New line
             console.print(f"[bold red]❌ Orchestrator failed:[/bold red] {str(e)}")
-            console.print("[bold yellow]⚡ Falling back to direct Modal execution...[/bold yellow]")
+            console.print("[bold yellow]⚡ Falling back to direct execution...[/bold yellow]")
         
-        # Fall back to the working Modal execution
-        results, execution_time, total_cost = _execute_with_modal(
+        # Fall back to the streaming analysis
+        return await _execute_with_streaming_analysis(
             scenarios=scenarios,
-            agent_config=agent_config,
+            agent_config=agent_config.model_dump(),
+            agent_profile=agent_profile,
             json_output=json_output
         )
-        
-        # Add intelligence analysis to the results
-        completed_trajectories = []
-        for result in results:
-            if not result.get("success") and result.get("trajectory"):
-                trajectory = result.get("trajectory", {})
-                try:
-                    violations = await assumption_detector.detect_live_violations(trajectory, agent_profile)
-                    result["assumptions_detected"] = [
-                        {
-                            "type": v.type,
-                            "severity": v.severity,
-                            "confidence": v.confidence,
-                            "description": v.description,
-                            "suggested_fix": v.suggested_fix,
-                            "business_impact": v.business_impact
+
+
+async def _execute_with_streaming_analysis(
+    scenarios: list[Scenario],
+    agent_config: dict[str, Any],
+    agent_profile: dict[str, Any],
+    json_output: bool,
+) -> tuple[list[dict[str, Any]], float, float]:
+    """
+    Execute scenarios with real-time streaming analysis and intelligence.
+
+    Integrates:
+    - ExecutionProgressLoader for live metrics
+    - FunnelAnalyzer for progressive capability analysis
+    - AssumptionDetector for real-time violation detection
+
+    Returns:
+        Tuple of (results, execution_time, total_cost)
+    """
+    # Initialize intelligence components
+    funnel_analyzer = FunnelAnalyzer()
+    assumption_detector = AssumptionDetector()
+    execution_loader = ExecutionProgressLoader(console)
+    
+    # Check Modal availability
+    modal_configured = await _check_modal_available()
+    
+    # Allow forcing local execution via environment variable
+    force_local = os.environ.get("ARC_FORCE_LOCAL", "").lower() in ["true", "1", "yes"]
+    if force_local:
+        console.print(format_warning("Forcing local execution (ARC_FORCE_LOCAL=true)"))
+        use_modal = False
+    else:
+        use_modal = state.config.get("use_modal", False) and modal_configured
+
+    if state.config.get("use_modal", False) and not modal_configured:
+        console.print(
+            format_warning(
+                "Modal requested but not properly configured - falling back to simulation"
+            )
+        )
+
+    if use_modal:
+        # Execute with Modal + streaming analysis (using orchestrator)
+        return await _execute_modal_with_streaming(
+            scenarios, agent_config, agent_profile,
+            funnel_analyzer, assumption_detector, execution_loader, 
+            json_output
+        )
+    else:
+        if not json_output:
+            console.print("[warning]Modal not available - using simulation mode[/warning]")
+        # Execute simulation with streaming analysis
+        return await _execute_simulation_with_streaming(
+            scenarios,
+            agent_config,
+            agent_profile,
+            funnel_analyzer,
+            assumption_detector,
+            execution_loader,
+            json_output,
+        )
+
+
+async def _execute_modal_with_streaming(
+    scenarios: list[Scenario],
+    agent_config: dict[str, Any],
+    agent_profile: dict[str, Any],
+    funnel_analyzer: FunnelAnalyzer,
+    assumption_detector: AssumptionDetector,
+    execution_loader: ExecutionProgressLoader,
+    json_output: bool,
+) -> tuple[list[dict[str, Any]], float, float]:
+    """Execute Modal scenarios with real-time streaming intelligence."""
+    try:
+        import modal
+
+        from arc.sandbox.engine.simulator import (
+            app as modal_app,
+        )
+        from arc.sandbox.engine.simulator import (
+            evaluate_single_scenario,
+        )
+    except ImportError as e:
+        raise RuntimeError(f"Modal execution failed: {e}") from e
+
+    start_time = time.time()
+    results = []
+    total_cost = 0.0
+    completed_trajectories = []
+
+    # Prepare scenarios for Modal
+    scenario_dicts = []
+    for scenario in scenarios:
+        if hasattr(scenario, "to_dict"):
+            scenario_dicts.append(scenario.to_dict())
+        else:
+            scenario_dicts.append(scenario)
+
+    # Merge configuration with capabilities to ensure tools have full definitions
+    enhanced_config = agent_profile["configuration"].copy()
+    enhanced_config["tools"] = agent_profile["capabilities"].get(
+        "tools", enhanced_config.get("tools", [])
+    )
+    enhanced_config["assumptions"] = agent_profile["capabilities"].get(
+        "assumptions", enhanced_config.get("assumptions", [])
+    )
+    enhanced_config["validation_rules"] = agent_profile["capabilities"].get(
+        "validation_rules", enhanced_config.get("validation_rules", [])
+    )
+    enhanced_config["job"] = agent_profile["capabilities"].get(
+        "job", enhanced_config.get("job", "")
+    )
+
+    scenario_tuples = [
+        (scenario, enhanced_config, i) for i, scenario in enumerate(scenario_dicts)
+    ]
+
+    # FIXED: Create single Modal app context for entire execution
+    try:
+        async with modal_app.run():
+            if not json_output:
+                # Initialize live streaming display
+                with console.start_live_session() as live:
+                    # Create progress tracking
+                    progress = execution_loader.create_execution_progress(
+                        len(scenarios)
+                    )
+                    task = progress.add_task(
+                        "Executing scenarios on Modal...", total=len(scenarios)
+                    )
+
+                    # Execute in batches with streaming updates
+                    batch_size = 10
+                    for batch_start in range(0, len(scenario_tuples), batch_size):
+                        batch = scenario_tuples[batch_start : batch_start + batch_size]
+
+                        # Execute batch on Modal within the single app context
+                        try:
+                            # Use async iteration for Modal map
+                            batch_results = []
+                            async for result in evaluate_single_scenario.map.aio(batch):
+                                batch_results.append(result)
+                        except Exception as e:
+                            console.print(
+                                format_warning(f"Modal batch execution error: {str(e)}")
+                            )
+                            # Create error results for failed batch
+                            for scenario_tuple in batch:
+                                results.append(
+                                    {
+                                        "scenario_id": f"scenario_{scenario_tuple[2]}",
+                                        "success": False,
+                                        "execution_time": 0,
+                                        "failure_reason": f"Modal execution error: {str(e)}",
+                                        "cost": 0,
+                                    }
+                                )
+                            progress.update(task, advance=len(batch))
+                            continue
+
+                        # Process batch results with intelligence analysis
+                        for result in batch_results:
+                            # Extract Modal result data
+                            processed_result = (
+                                await _process_modal_result_with_intelligence(
+                                    result, assumption_detector, agent_profile
+                                )
+                            )
+                            results.append(processed_result)
+                            completed_trajectories.append(
+                                processed_result.get("trajectory", {})
+                            )
+                            total_cost += processed_result.get("cost", 0)
+
+                            progress.update(task, advance=1)
+
+                        # Update live metrics every batch
+                        # Estimate active containers based on execution state
+                        remaining_scenarios = len(scenarios) - len(results)
+                        max_containers = min(50, len(scenarios))  # Modal max is 50
+                        active_containers = min(remaining_scenarios, len(batch), max_containers)
+                        
+                        # Calculate estimated total time based on current progress
+                        if len(results) > 0:
+                            avg_time_per_scenario = (time.time() - start_time) / len(results)
+                            estimated_total_time = avg_time_per_scenario * len(scenarios)
+                        else:
+                            estimated_total_time = (time.time() - start_time) * 1.5
+                        
+                        live_metrics = {
+                            "completed": len(results),
+                            "total": len(scenarios),
+                            "cost": total_cost,
+                            "estimated_cost": total_cost
+                            * (len(scenarios) / len(results))
+                            if results
+                            else 0,
+                            "elapsed_time": time.time() - start_time,
+                            "estimated_total_time": estimated_total_time,
+                            "active_containers": active_containers,
+                            "max_containers": max_containers,
+                            "failures": len(
+                                [r for r in results if not r.get("success", False)]
+                            ),
                         }
-                        for v in violations
-                    ]
-                except Exception:
-                    pass  # Continue if assumption detection fails
-                
-                completed_trajectories.append(trajectory)
-    
-    # Post-execution funnel analysis (only for non-JSON mode)
-    if completed_trajectories and not json_output:
-        try:
-            funnel = await funnel_analyzer.build_capability_funnel(agent_profile, completed_trajectories)
-            
-            # Display final funnel analysis
-            funnel_table = console.format_funnel([
-                {
-                    "name": step.name,
-                    "success_rate": step.success_rate,
-                    "failures": len(step.failures),
-                    "is_bottleneck": step.is_bottleneck,
-                    "impact": "Critical" if step.is_bottleneck else "Normal"
-                }
-                for step in funnel.steps
-            ])
-            
-            console.print()
-            console.print(funnel_table)
-            console.print()
-            
-        except Exception as e:
-            console.print(f"[bold yellow]Warning:[/bold yellow] Could not perform funnel analysis: {e}")
-    
+
+                        # Display live metrics panel
+                        metrics_panel = execution_loader.display_live_metrics(
+                            live_metrics
+                        )
+                        live.update(metrics_panel)
+                        
+                        # Display execution timeline and performance metrics (every 3 batches)
+                        if len(results) % 30 == 0 and len(results) > 0:
+                            # Calculate performance metrics
+                            elapsed = time.time() - start_time
+                            scenarios_per_minute = (len(results) / elapsed) * 60 if elapsed > 0 else 0
+                            avg_scenario_time = elapsed / len(results) if len(results) > 0 else 0
+                            
+                            # Calculate speedup factor (estimate)
+                            sequential_time = avg_scenario_time * len(results)
+                            speedup_factor = sequential_time / elapsed if elapsed > 0 else 1
+                            
+                            # Container efficiency (active/max ratio over time)
+                            container_efficiency = (active_containers / max_containers * 100) if max_containers > 0 else 0
+                            
+                            timeline_data = {
+                                "scenarios_per_minute": scenarios_per_minute,
+                                "avg_scenario_time": avg_scenario_time,
+                                "speedup_factor": speedup_factor,
+                                "container_efficiency": container_efficiency,
+                                "performance_trend": "improving" if speedup_factor > 1.5 else "stable"
+                            }
+                            
+                            timeline_panel = execution_loader.display_execution_timeline(timeline_data)
+                            console.print()
+                            console.print(timeline_panel)
+                            console.print()
+                        
+                        # Enhanced error monitoring with recovery procedures
+                        if len(results) > 0:
+                            failed_results = [r for r in results if not r.get("success", False)]
+                            if failed_results:
+                                # Categorize errors
+                                error_categories = {}
+                                for result in failed_results:
+                                    error_category = result.get("error_category", "unknown")
+                                    error_categories[error_category] = error_categories.get(error_category, 0) + 1
+                                
+                                error_rate = (len(failed_results) / len(results)) * 100
+                                
+                                error_data = {
+                                    "errors": failed_results,
+                                    "total_errors": len(failed_results),
+                                    "error_rate": error_rate,
+                                    "error_categories": error_categories,
+                                    "recovery_status": "in_progress" if len(failed_results) > 3 else "none",
+                                    "clustering_active": len(failed_results) >= 3,
+                                    "clusters_found": min(len(error_categories), 3)
+                                }
+                                
+                                error_panel = execution_loader.display_live_error_monitoring(error_data)
+                                if error_panel:
+                                    console.print()
+                                    console.print(error_panel)
+                                    console.print()
+
+                        # Progressive funnel analysis (every 10 scenarios)
+                        if (
+                            len(completed_trajectories) % 10 == 0
+                            and len(completed_trajectories) > 0
+                        ):
+                            funnel = await funnel_analyzer.build_capability_funnel(
+                                agent_profile, completed_trajectories[-10:]
+                            )
+
+                            # Display funnel update
+                            funnel_table = console.format_funnel(
+                                [
+                                    {
+                                        "name": step.name,
+                                        "success_rate": step.success_rate,
+                                        "failures": len(step.failures),
+                                        "is_bottleneck": step.is_bottleneck,
+                                        "impact": "Critical"
+                                        if step.is_bottleneck
+                                        else "Normal",
+                                    }
+                                    for step in funnel.steps
+                                ]
+                            )
+
+                            console.print()
+                            console.print(funnel_table)
+                            console.print()
+
+                        # Real-time assumption violation detection
+                        failed_trajectories = [
+                            r.get("trajectory", {})
+                            for r in results[-len(batch) :]
+                            if not r.get("success", False)
+                        ]
+
+                        if failed_trajectories:
+                            violations = []
+                            for trajectory in failed_trajectories:
+                                trajectory_violations = (
+                                    await assumption_detector.detect_live_violations(
+                                        trajectory, agent_profile
+                                    )
+                                )
+                                violations.extend(trajectory_violations)
+
+                            if violations:
+                                violations_panel = (
+                                    execution_loader.display_assumption_alerts(
+                                        [
+                                            {
+                                                "type": v.type,
+                                                "severity": v.severity,
+                                                "description": v.description,
+                                            }
+                                            for v in violations[:3]  # Top 3 violations
+                                        ]
+                                    )
+                                )
+                                if violations_panel:
+                                    console.print()
+                                    console.print(violations_panel)
+                                    console.print()
+
+                        # Short delay for visual feedback
+                        await asyncio.sleep(0.1)
+            else:
+                # JSON mode: execute without visual feedback
+                # Execute all scenarios at once for JSON output
+                try:
+                    modal_results = []
+                    async for result in evaluate_single_scenario.map.aio(
+                        scenario_tuples
+                    ):
+                        modal_results.append(result)
+                except Exception as e:
+                    # Return error results for all scenarios
+                    for i, _scenario_tuple in enumerate(scenario_tuples):
+                        results.append(
+                            {
+                                "scenario_id": f"scenario_{i}",
+                                "success": False,
+                                "execution_time": 0,
+                                "failure_reason": f"Modal execution error: {str(e)}",
+                                "cost": 0,
+                            }
+                        )
+                    execution_time = time.time() - start_time
+                    return results, execution_time, 0.0
+
+                # Process all results
+                for result in modal_results:
+                    processed_result = await _process_modal_result_with_intelligence(
+                        result, assumption_detector, agent_profile
+                    )
+                    results.append(processed_result)
+                    total_cost += processed_result.get("cost", 0)
+
+    except Exception as e:
+        # Handle Modal app context errors
+        error_msg = str(e)
+        console.print(format_error(f"Modal app initialization failed: {error_msg}"))
+        
+        # Provide more detailed error information
+        if "Token ID is malformed" in error_msg:
+            console.print(format_warning("\nModal authentication issue detected."))
+            console.print("This can happen when:")
+            console.print("  • Modal tokens have expired")
+            console.print("  • Using incompatible token format")
+            console.print("  • Token was corrupted during copy/paste")
+            console.print("\nTo fix:")
+            console.print("  1. Clear existing tokens: unset MODAL_TOKEN_ID MODAL_TOKEN_SECRET")
+            console.print("  2. Re-authenticate: modal token new")
+            console.print("  3. Or use Arc demo tokens if provided")
+        
+        # Return empty results with error
+        execution_time = time.time() - start_time
+        return [], execution_time, 0.0
+
+    execution_time = time.time() - start_time
     return results, execution_time, total_cost
 
 
 async def _process_modal_result_with_intelligence(
-    modal_result: Dict[str, Any],
+    modal_result: dict[str, Any],
     assumption_detector: AssumptionDetector,
-    agent_profile: Dict[str, Any]
-) -> Dict[str, Any]:
+    agent_profile: dict[str, Any],
+) -> dict[str, Any]:
     """Process Modal result with intelligence analysis."""
     scenario = modal_result.get("scenario", {})
     trajectory = modal_result.get("trajectory", {})
     reliability_score = modal_result.get("reliability_score", {})
-    
+
     # Calculate cost from token usage
     token_usage = trajectory.get("token_usage", {})
     cost = token_usage.get("total_cost", 0.0)
-    
+
     # Determine success based on reliability score
     success = reliability_score.get("overall_score", 0) >= 0.7
-    
+
     # AI-enhanced assumption detection for failed scenarios
     assumptions_detected = []
     if not success:
@@ -715,63 +1161,75 @@ async def _process_modal_result_with_intelligence(
                     "confidence": v.confidence,
                     "description": v.description,
                     "suggested_fix": v.suggested_fix,
-                    "business_impact": v.business_impact
+                    "business_impact": v.business_impact,
                 }
                 for v in violations
             ]
-        except Exception as e:
+        except Exception:
             # Log but don't fail on assumption detection errors
             pass
-    
+
     return {
-        "scenario_id": scenario.get("id", f"scenario_{modal_result.get('scenario_index', 0)}"),
+        "scenario_id": scenario.get(
+            "id", f"scenario_{modal_result.get('scenario_index', 0)}"
+        ),
         "success": success,
         "execution_time": trajectory.get("execution_time_seconds", 0),
-        "failure_reason": trajectory.get("final_response") if trajectory.get("status") == "error" else None,
+        "failure_reason": trajectory.get("final_response")
+        if trajectory.get("status") == "error"
+        else None,
         "cost": cost,
         "tokens_used": token_usage.get("total_tokens", 0),
         "trajectory": trajectory,
         "reliability_score": reliability_score.get("overall_score", 0),
         "assumptions_detected": assumptions_detected,
         "modal_call_id": os.environ.get("MODAL_FUNCTION_CALL_ID"),
-        "error_category": categorize_error(trajectory.get("final_response")) if trajectory.get("status") == "error" else None
+        "error_category": categorize_error(trajectory.get("final_response"))
+        if trajectory.get("status") == "error"
+        else None,
     }
 
 
 async def _execute_simulation_with_streaming(
-    scenarios: List[Scenario],
-    agent_config: Dict[str, Any],
-    agent_profile: Dict[str, Any],
+    scenarios: list[Scenario],
+    agent_config: dict[str, Any],
+    agent_profile: dict[str, Any],
     funnel_analyzer: FunnelAnalyzer,
     assumption_detector: AssumptionDetector,
     execution_loader: ExecutionProgressLoader,
-    json_output: bool
-) -> tuple[List[Dict[str, Any]], float, float]:
+    json_output: bool,
+) -> tuple[list[dict[str, Any]], float, float]:
     """Execute simulation with streaming analysis for demo purposes."""
     start_time = time.time()
     results = []
-    
+
     if not json_output:
-        console.print("[warning]Modal not configured - simulating execution with intelligence analysis[/warning]")
+        console.print(
+            "[warning]Modal not configured - simulating execution with intelligence analysis[/warning]"
+        )
         console.print()
-        
+
         # Simulate with live updates
         progress = execution_loader.create_execution_progress(len(scenarios))
         task = progress.add_task("Simulating scenarios...", total=len(scenarios))
-        
+
         for i, scenario in enumerate(scenarios):
             # Simulate execution time
             await asyncio.sleep(0.02)
-            
+
             # Generate mock result with currency assumption focus
             is_currency = "currency" in str(scenario).lower()
             success = not (is_currency and i < 15)  # First 15 currency scenarios fail
-            
+
             result = {
-                "scenario_id": scenario.get("scenario_id", f"scenario_{i}") if isinstance(scenario, dict) else getattr(scenario, "scenario_id", f"scenario_{i}"),
+                "scenario_id": scenario.get("scenario_id", f"scenario_{i}")
+                if isinstance(scenario, dict)
+                else getattr(scenario, "scenario_id", f"scenario_{i}"),
                 "success": success,
                 "execution_time": 0.5 + (i * 0.01),
-                "failure_reason": "Currency assumption violation: Expected multi-currency support" if not success else None,
+                "failure_reason": "Currency assumption violation: Expected multi-currency support"
+                if not success
+                else None,
                 "assumptions_detected": [
                     {
                         "type": "currency",
@@ -779,9 +1237,11 @@ async def _execute_simulation_with_streaming(
                         "confidence": 85,
                         "description": "Agent assumes USD for all transactions without validation",
                         "suggested_fix": "Add currency validation and conversion tools",
-                        "business_impact": "Financial calculation errors affecting customer billing"
+                        "business_impact": "Financial calculation errors affecting customer billing",
                     }
-                ] if not success else []
+                ]
+                if not success
+                else [],
             }
             results.append(result)
             progress.update(task, advance=1)
@@ -790,180 +1250,21 @@ async def _execute_simulation_with_streaming(
         for i, scenario in enumerate(scenarios):
             is_currency = "currency" in str(scenario).lower()
             success = not (is_currency and i < 15)
-            
+
             result = {
-                "scenario_id": scenario.get("scenario_id", f"scenario_{i}") if isinstance(scenario, dict) else getattr(scenario, "scenario_id", f"scenario_{i}"),
+                "scenario_id": scenario.get("scenario_id", f"scenario_{i}")
+                if isinstance(scenario, dict)
+                else getattr(scenario, "scenario_id", f"scenario_{i}"),
                 "success": success,
                 "execution_time": 0.5 + (i * 0.01),
-                "failure_reason": "Currency assumption violation: Expected multi-currency support" if not success else None
+                "failure_reason": "Currency assumption violation: Expected multi-currency support"
+                if not success
+                else None,
             }
             results.append(result)
-    
+
     execution_time = time.time() - start_time
     return results, execution_time, 0.0
 
 
-def _execute_with_modal(
-    scenarios: List[Scenario],
-    agent_config: Dict[str, Any],
-    json_output: bool
-) -> tuple[List[Dict[str, Any]], float, float]:
-    """Execute scenarios using Modal sandbox.
-    
-    Returns:
-        Tuple of (results, execution_time, total_cost)
-    """
-    try:
-        import modal
-        # Import the app and function from simulator
-        from arc.sandbox.engine.simulator import app as modal_app, evaluate_single_scenario
-    except ImportError as e:
-        raise RuntimeError(f"Modal execution failed: {e}")
-    
-    start_time = time.time()
-    results = []
-    total_cost = 0.0
-    
-    # Prepare scenarios for sandbox
-    # Convert Scenario objects to dicts if needed
-    scenario_dicts = []
-    for scenario in scenarios:
-        if hasattr(scenario, 'to_dict'):
-            scenario_dicts.append(scenario.to_dict())
-        else:
-            scenario_dicts.append(scenario)
-    
-    # Create sandbox data format
-    sandbox_data = {
-        "scenarios": scenario_dicts,
-        "metadata": {
-            "total_scenarios": len(scenarios),
-            "generation_timestamp": datetime.now().isoformat(),
-            "agent_model": agent_config.get("model", "unknown")
-        }
-    }
-    
-    # Create tuples of (scenario, agent_config, index) for Modal
-    scenario_tuples = [
-        (scenario, agent_config, i) 
-        for i, scenario in enumerate(sandbox_data["scenarios"])
-    ]
-    
-    if not json_output:
-        with Progress(
-            SpinnerColumn(),
-            TextColumn("[progress.description]{task.description}"),
-            BarColumn(),
-            TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
-            TimeRemainingColumn(),
-            console=console,
-        ) as progress:
-            task = progress.add_task("Executing scenarios on Modal...", total=len(scenarios))
-            
-            # Execute in batches for progress updates
-            batch_size = 10
-            for i in range(0, len(scenario_tuples), batch_size):
-                batch = scenario_tuples[i:i+batch_size]
-                
-                # Execute batch on Modal
-                try:
-                    with modal_app.run():
-                        batch_results = list(evaluate_single_scenario.map(batch))
-                except Exception as e:
-                    console.print(format_warning(f"Modal execution error for batch {i//batch_size + 1}: {str(e)}"))
-                    # Create error results for failed batch
-                    for scenario_tuple in batch:
-                        results.append({
-                            "scenario_id": f"scenario_{scenario_tuple[2]}",
-                            "success": False,
-                            "execution_time": 0,
-                            "failure_reason": f"Modal execution error: {str(e)}",
-                            "tool_calls": [],
-                            "cost": 0
-                        })
-                    progress.update(task, advance=len(batch))
-                    continue
-                
-                for result in batch_results:
-                    # Extract data from Modal result structure
-                    scenario = result.get("scenario", {})
-                    trajectory = result.get("trajectory", {})
-                    reliability_score = result.get("reliability_score", {})
-                    detailed_trajectory = result.get("detailed_trajectory", {})
-
-                    # Calculate cost from token usage
-                    token_usage = trajectory.get("token_usage", {})
-                    cost = token_usage.get("total_cost", 0.0)
-
-                    # Determine success based on reliability score
-                    success = reliability_score.get("overall_score", 0) >= 0.7
-
-                    # Get Modal execution ID if available
-                    modal_call_id = os.environ.get("MODAL_FUNCTION_CALL_ID")
-                    results.append({
-                        "scenario_id": scenario.get("id", f"scenario_{result.get('scenario_index', 0)}"),
-                        "success": success,
-                        "execution_time": trajectory.get("execution_time_seconds", 0),
-                        "failure_reason": trajectory.get("final_response") if trajectory.get("status") == "error" else None,
-                        "tool_calls": [event for event in trajectory.get("full_trajectory", []) if event.get("type") == "tool_call"],
-                        "cost": cost,
-                        "tokens_used": token_usage.get("total_tokens", 0),
-                        "trajectory": detailed_trajectory,
-                        "reliability_score": reliability_score.get("overall_score", 0),
-                        "modal_call_id": modal_call_id,
-                        "error_category": categorize_error(trajectory.get("final_response")) if trajectory.get("status") == "error" else None
-                    })
-                    total_cost += cost
-                    progress.update(task, advance=1)
-    else:
-        # Silent execution for JSON output
-        try:
-            with modal_app.run():
-                modal_results = list(evaluate_single_scenario.map(scenario_tuples))
-        except Exception as e:
-            # Return error results for all scenarios
-            for i, scenario_tuple in enumerate(scenario_tuples):
-                results.append({
-                    "scenario_id": f"scenario_{i}",
-                    "success": False,
-                    "execution_time": 0,
-                    "failure_reason": f"Modal execution error: {str(e)}",
-                    "tool_calls": [],
-                    "cost": 0
-                })
-            execution_time = time.time() - start_time
-            return results, execution_time, 0.0
-        
-        for result in modal_results:
-            # Extract data from Modal result structure
-            scenario = result.get("scenario", {})
-            trajectory = result.get("trajectory", {})
-            reliability_score = result.get("reliability_score", {})
-            detailed_trajectory = result.get("detailed_trajectory", {})
-
-            # Calculate cost from token usage
-            token_usage = trajectory.get("token_usage", {})
-            cost = token_usage.get("total_cost", 0.0)
-
-            # Determine success based on reliability score
-            success = reliability_score.get("overall_score", 0) >= 0.7
-
-            # Get Modal execution ID if available
-            modal_call_id = os.environ.get("MODAL_FUNCTION_CALL_ID")
-            results.append({
-                "scenario_id": scenario.get("id", f"scenario_{result.get('scenario_index', 0)}"),
-                "success": success,
-                "execution_time": trajectory.get("execution_time_seconds", 0),
-                "failure_reason": trajectory.get("final_response") if trajectory.get("status") == "error" else None,
-                "tool_calls": [event for event in trajectory.get("full_trajectory", []) if event.get("type") == "tool_call"],
-                "cost": cost,
-                "tokens_used": token_usage.get("total_tokens", 0),
-                "trajectory": detailed_trajectory,
-                "reliability_score": reliability_score.get("overall_score", 0),
-                "modal_call_id": modal_call_id,
-                "error_category": categorize_error(trajectory.get("final_response")) if trajectory.get("status") == "error" else None
-            })
-            total_cost += cost
-    
-    execution_time = time.time() - start_time
-    return results, execution_time, total_cost
+# Removed unused _execute_with_modal function - replaced by _execute_modal_with_streaming

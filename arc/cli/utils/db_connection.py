@@ -39,7 +39,6 @@ class DatabaseConnectionManager:
             self._client = ArcDBClient(connection_string=self._connection_url)
             await self._client.initialize()
             self._is_connected = True
-            console.print("Database connection established", style="success")
             return True
         except Exception as e:
             console.print(

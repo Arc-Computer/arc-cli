@@ -15,7 +15,7 @@ def convert_row_to_dict(row) -> dict[str, Any]:
         row: Database row object with _mapping attribute
         
     Returns:
-        Dictionary with UUID values converted to strings
+        Dictionary with UUID fields converted to strings
     """
     data = dict(row._mapping)
     

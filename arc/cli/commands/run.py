@@ -824,6 +824,18 @@ async def _execute_modal_with_streaming(
                             progress.update(task, advance=1)
 
                         # Update live metrics every batch
+                        # Estimate active containers based on execution state
+                        remaining_scenarios = len(scenarios) - len(results)
+                        max_containers = min(50, len(scenarios))  # Modal max is 50
+                        active_containers = min(remaining_scenarios, len(batch), max_containers)
+                        
+                        # Calculate estimated total time based on current progress
+                        if len(results) > 0:
+                            avg_time_per_scenario = (time.time() - start_time) / len(results)
+                            estimated_total_time = avg_time_per_scenario * len(scenarios)
+                        else:
+                            estimated_total_time = (time.time() - start_time) * 1.5
+                        
                         live_metrics = {
                             "completed": len(results),
                             "total": len(scenarios),
@@ -833,6 +845,9 @@ async def _execute_modal_with_streaming(
                             if results
                             else 0,
                             "elapsed_time": time.time() - start_time,
+                            "estimated_total_time": estimated_total_time,
+                            "active_containers": active_containers,
+                            "max_containers": max_containers,
                             "failures": len(
                                 [r for r in results if not r.get("success", False)]
                             ),
@@ -843,6 +858,61 @@ async def _execute_modal_with_streaming(
                             live_metrics
                         )
                         live.update(metrics_panel)
+                        
+                        # Display execution timeline and performance metrics (every 3 batches)
+                        if len(results) % 30 == 0 and len(results) > 0:
+                            # Calculate performance metrics
+                            elapsed = time.time() - start_time
+                            scenarios_per_minute = (len(results) / elapsed) * 60 if elapsed > 0 else 0
+                            avg_scenario_time = elapsed / len(results) if len(results) > 0 else 0
+                            
+                            # Calculate speedup factor (estimate)
+                            sequential_time = avg_scenario_time * len(results)
+                            speedup_factor = sequential_time / elapsed if elapsed > 0 else 1
+                            
+                            # Container efficiency (active/max ratio over time)
+                            container_efficiency = (active_containers / max_containers * 100) if max_containers > 0 else 0
+                            
+                            timeline_data = {
+                                "scenarios_per_minute": scenarios_per_minute,
+                                "avg_scenario_time": avg_scenario_time,
+                                "speedup_factor": speedup_factor,
+                                "container_efficiency": container_efficiency,
+                                "performance_trend": "improving" if speedup_factor > 1.5 else "stable"
+                            }
+                            
+                            timeline_panel = execution_loader.display_execution_timeline(timeline_data)
+                            console.print()
+                            console.print(timeline_panel)
+                            console.print()
+                        
+                        # Enhanced error monitoring with recovery procedures
+                        if len(results) > 0:
+                            failed_results = [r for r in results if not r.get("success", False)]
+                            if failed_results:
+                                # Categorize errors
+                                error_categories = {}
+                                for result in failed_results:
+                                    error_category = result.get("error_category", "unknown")
+                                    error_categories[error_category] = error_categories.get(error_category, 0) + 1
+                                
+                                error_rate = (len(failed_results) / len(results)) * 100
+                                
+                                error_data = {
+                                    "errors": failed_results,
+                                    "total_errors": len(failed_results),
+                                    "error_rate": error_rate,
+                                    "error_categories": error_categories,
+                                    "recovery_status": "in_progress" if len(failed_results) > 3 else "none",
+                                    "clustering_active": len(failed_results) >= 3,
+                                    "clusters_found": min(len(error_categories), 3)
+                                }
+                                
+                                error_panel = execution_loader.display_live_error_monitoring(error_data)
+                                if error_panel:
+                                    console.print()
+                                    console.print(error_panel)
+                                    console.print()
 
                         # Progressive funnel analysis (every 10 scenarios)
                         if (

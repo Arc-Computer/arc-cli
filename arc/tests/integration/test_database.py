@@ -34,10 +34,8 @@ load_dotenv()
 project_root = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(project_root))
 
-
 from arc.database.client import ArcDBClient
 from arc.database.client import convert_row_to_dict
-
 
 
 class TimescaleDBTester:

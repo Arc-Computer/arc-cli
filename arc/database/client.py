@@ -9,7 +9,7 @@ from __future__ import annotations
 import os
 import logging
 import asyncio
-from typing import AsyncIterator, Dict, List, Optional, Any, TypeVar, Callable
+from typing import AsyncIterator, List, Optional, Any, TypeVar, Callable
 from datetime import datetime, timedelta, timezone
 import json
 import hashlib
@@ -22,6 +22,8 @@ from sqlalchemy import text, select, insert, update, delete
 from sqlalchemy.exc import SQLAlchemyError, OperationalError, IntegrityError
 import asyncpg
 
+from .utils import convert_row_to_dict
+
 # Configure logging
 logger = logging.getLogger(__name__)
 
@@ -31,23 +33,6 @@ _engine: AsyncEngine | None = None
 
 # Type variable for retry decorator
 T = TypeVar('T')
-
-
-def convert_row_to_dict(row) -> Dict[str, Any]:
-    """
-    Convert a database row to a dictionary, handling UUID conversion.
-    
-    AsyncPG returns UUID fields as special UUID objects that need to be
-    converted to strings for JSON serialization.
-    """
-    data = dict(row._mapping)
-    
-    # Convert any UUID fields to strings
-    for key, value in data.items():
-        if hasattr(value, "hex"):  # Check if it's a UUID object
-            data[key] = str(value)
-    
-    return data
 
 
 class DatabaseError(Exception):
@@ -159,7 +144,7 @@ class TimescaleDBHealth:
         self.engine = engine
     
     @with_retry(max_attempts=3, delay=0.5)
-    async def check_extensions(self) -> Dict[str, str]:
+    async def check_extensions(self) -> dict[str, str]:
         """Check that required extensions are installed."""
         try:
             async with self.engine.begin() as conn:
@@ -177,7 +162,7 @@ class TimescaleDBHealth:
             raise DatabaseError(f"Extension check failed: {e}") from e
     
     @with_retry(max_attempts=3, delay=0.5)
-    async def check_hypertables(self) -> List[Dict[str, Any]]:
+    async def check_hypertables(self) -> List[dict[str, Any]]:
         """Check status of hypertables."""
         try:
             async with self.engine.begin() as conn:
@@ -196,7 +181,7 @@ class TimescaleDBHealth:
             raise DatabaseError(f"Hypertable check failed: {e}") from e
     
     @with_retry(max_attempts=3, delay=0.5)
-    async def check_compression_stats(self) -> List[Dict[str, Any]]:
+    async def check_compression_stats(self) -> List[dict[str, Any]]:
         """Check compression statistics."""
         try:
             async with self.engine.begin() as conn:
@@ -220,7 +205,7 @@ class TimescaleDBHealth:
             logger.error(f"Failed to check compression stats: {e}")
             raise DatabaseError(f"Compression stats check failed: {e}") from e
     
-    async def check_connection_pool(self) -> Dict[str, Any]:
+    async def check_connection_pool(self) -> dict[str, Any]:
         """Check connection pool statistics."""
         try:
             pool = self.engine.pool
@@ -317,7 +302,7 @@ class ArcDBClient:
             (current_avg * (total_queries - 1) + query_time) / total_queries
         )
     
-    async def get_metrics(self) -> Dict[str, Any]:
+    async def get_metrics(self) -> dict[str, Any]:
         """Get current performance metrics."""
         pool_stats = await self.health.check_connection_pool()
         return {
@@ -331,7 +316,7 @@ class ArcDBClient:
         }
     
     @with_retry(max_attempts=3, delay=1.0)
-    async def initialize(self) -> Dict[str, Any]:
+    async def initialize(self) -> dict[str, Any]:
         """Initialize database connection and verify TimescaleDB setup."""
         start_time = asyncio.get_event_loop().time()
         
@@ -375,7 +360,7 @@ class ArcDBClient:
             logger.error(f"Database initialization failed: {e}")
             return error_result
     
-    async def deploy_schema(self) -> Dict[str, Any]:
+    async def deploy_schema(self) -> dict[str, Any]:
         """Deploy the complete schema to TimescaleDB."""
         try:
             schema_file = os.path.join(os.path.dirname(__file__), "schema", "tables.sql")
@@ -472,7 +457,7 @@ class ArcDBClient:
     
     # Configuration Management
     async def create_configuration(self, name: str, user_id: str, 
-                                 initial_config: Dict[str, Any]) -> str:
+                                 initial_config: dict[str, Any]) -> str:
         """Create a new configuration with initial version.
         
         Args:
@@ -552,7 +537,7 @@ class ArcDBClient:
         overall_score: float | None = None,
         total_cost_usd: float | None = None,
         execution_time_ms: int | None = None,
-        metadata: Dict[str, Any] | None = None,
+        metadata: dict[str, Any] | None = None,
         completed_scenarios: int | None = None,
         completed_at: datetime | None = None,
     ) -> None:
@@ -586,7 +571,7 @@ class ArcDBClient:
             )
 
     # Scenario Management
-    async def ensure_scenario_exists(self, scenario_id: str, scenario_data: Optional[Dict[str, Any]] = None) -> None:
+    async def ensure_scenario_exists(self, scenario_id: str, scenario_data: Optional[dict[str, Any]] = None) -> None:
         """Ensure a scenario exists in the database, creating it if necessary."""
         async with self.engine.begin() as conn:
             # Check if scenario exists
@@ -610,7 +595,7 @@ class ArcDBClient:
                 })
 
     # Outcome Recording (Optimized for TimescaleDB hypertable)
-    def _augment_trajectory(self, trajectory: Dict[str, Any], outcome_data: Dict[str, Any]) -> Dict[str, Any]:
+    def _augment_trajectory(self, trajectory: dict[str, Any], outcome_data: dict[str, Any]) -> dict[str, Any]:
         """Augment trajectory data with required fields if missing."""
         if not isinstance(trajectory, dict):
             trajectory = {}
@@ -626,7 +611,7 @@ class ArcDBClient:
             
         return augmented
     
-    def _validate_trajectory(self, trajectory: Dict[str, Any]) -> None:
+    def _validate_trajectory(self, trajectory: dict[str, Any]) -> None:
         """Validate trajectory data meets database constraints."""
         if not isinstance(trajectory, dict):
             raise ValueError("Trajectory must be a dictionary")
@@ -652,7 +637,7 @@ class ArcDBClient:
                 f"Must be one of: {', '.join(sorted(valid_statuses))}"
             )
 
-    async def record_outcome(self, outcome_data: Dict[str, Any]) -> str:
+    async def record_outcome(self, outcome_data: dict[str, Any]) -> str:
         """Record individual scenario outcome to TimescaleDB hypertable."""
         outcome_id = str(uuid.uuid4())
         
@@ -704,7 +689,7 @@ class ArcDBClient:
         return outcome_id
     
     # Batch Operations (Optimized for high-throughput Modal executions)
-    async def record_outcomes_batch(self, outcomes: List[Dict[str, Any]]) -> List[str]:
+    async def record_outcomes_batch(self, outcomes: List[dict[str, Any]]) -> List[str]:
         """Batch insert outcomes for high-throughput Modal executions."""
         outcome_ids = [str(uuid.uuid4()) for _ in outcomes]
 
@@ -762,7 +747,7 @@ class ArcDBClient:
     
     # Analytics Queries (Direct queries since continuous aggregates are not deployed yet)
     async def get_simulation_performance(self, simulation_id: str, 
-                                       time_range: timedelta = timedelta(days=7)) -> Dict[str, Any]:
+                                       time_range: timedelta = timedelta(days=7)) -> dict[str, Any]:
         """Get simulation performance metrics using direct TimescaleDB queries."""
         async with self.engine.begin() as conn:
             # Convert timedelta to PostgreSQL interval string
@@ -803,7 +788,7 @@ class ArcDBClient:
                 }
             }
     
-    async def get_recent_failures(self, limit: int = 50) -> List[Dict[str, Any]]:
+    async def get_recent_failures(self, limit: int = 50) -> List[dict[str, Any]]:
         """Get recent failures for analysis."""
         async with self.engine.begin() as conn:
             result = await conn.execute(text("""

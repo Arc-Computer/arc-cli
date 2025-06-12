@@ -31,8 +31,7 @@ class HybridState(CLIState):
         # For day 1, use a simple approach
         user_id = self.config.get("user_id")
         if not user_id:
-            # Use a proper UUID format for database compatibility
-            user_id = str(uuid4())
+            user_id = f"user_{uuid4().hex[:12]}"
             self.config["user_id"] = user_id
             self._save_config()
         return user_id
@@ -142,54 +141,9 @@ class HybridState(CLIState):
         # First save to files synchronously
         run_dir = super().save_run(result)
 
-        # Then try to save to database if available
+        # Database persistence is now handled by ModalOrchestrator
+        # No need to create event loops here to avoid conflicts
         if self.db_connected:
-            try:
-                # Check if an event loop is already running
-                try:
-                    asyncio.get_running_loop()
-                    # We're in an async context, use ensure_future for fire-and-forget
-                    # This avoids blocking the current operation
-                    future = asyncio.ensure_future(self._save_to_database(result))
-                    # Add error handler to log any failures
-                    future.add_done_callback(self._handle_db_save_error)
-                except RuntimeError:
-                    # No event loop running - we're in a sync context
-                    # Create a new event loop in a thread to avoid blocking
-                    import threading
-
-                    def run_async_save():
-                        try:
-                            # Create a new event loop for this thread
-                            new_loop = asyncio.new_event_loop()
-                            asyncio.set_event_loop(new_loop)
-                            new_loop.run_until_complete(self._save_to_database(result))
-                            new_loop.close()
-                        except Exception as e:
-                            console.print(
-                                f"Warning: Background database save failed: {str(e)}. Data saved to files only.",
-                                style="warning",
-                            )
-
-                    # Run in a background thread to avoid blocking
-                    thread = threading.Thread(target=run_async_save, daemon=True)
-                    thread.start()
-            except Exception as e:
-                console.print(
-                    f"Warning: Database save failed: {str(e)}. Data saved to files only.",
-                    style="warning",
-                )
+            console.print("[info]Database persistence handled by orchestrator[/info]")
 
         return run_dir
-
-    def _handle_db_save_error(self, task: asyncio.Task) -> None:
-        """Handle errors from async database save task."""
-        try:
-            # This will raise an exception if the task failed
-            task.result()
-        except Exception as e:
-            # Log the error but don't crash - data is already saved to files
-            console.print(
-                f"Warning: Async database save failed: {str(e)}. Data saved to files only.",
-                style="warning",
-            )

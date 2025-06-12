@@ -5,7 +5,8 @@ without requiring authentication.
 """
 
 import os
-from typing import Any, Dict, List, AsyncIterator
+from collections.abc import AsyncIterator
+from typing import Any
 
 try:
     import modal
@@ -16,48 +17,49 @@ except ImportError:
 
 class ArcModalAPI:
     """Public API for Arc simulations on Modal."""
-    
+
     @staticmethod
     async def run_scenarios(
-        scenarios: List[Dict[str, Any]], 
-        agent_config: Dict[str, Any],
+        scenarios: list[dict[str, Any]],
+        agent_config: dict[str, Any],
         batch_size: int = 10
-    ) -> AsyncIterator[Dict[str, Any]]:
+    ) -> AsyncIterator[dict[str, Any]]:
         """Run scenarios using deployed Modal app.
-        
+
         Args:
             scenarios: List of scenarios to execute
             agent_config: Agent configuration
             batch_size: Number of scenarios per batch
-            
+
         Yields:
             Results from scenario execution
-            
+
         Raises:
             RuntimeError: If Modal is not available or function lookup fails
         """
         if not MODAL_AVAILABLE:
             raise RuntimeError("Modal not installed")
-            
+
         try:
             # Look up the deployed function
-            evaluate_fn = modal.Function.lookup(
-                "arc-production", 
-                "evaluate_single_scenario"
-            )
+            app_name = "arc-production"
+            func_name = "evaluate_single_scenario"
+
+            evaluate_fn = modal.Function.from_name(app_name, func_name)
+
         except Exception as e:
-            raise RuntimeError(f"Failed to find deployed Modal function: {e}")
-        
+            raise RuntimeError(f"Failed to find deployed Modal function: {e}") from e
+
         # Prepare scenarios with config
         scenario_tuples = [
-            (scenario, agent_config, i) 
+            (scenario, agent_config, i)
             for i, scenario in enumerate(scenarios)
         ]
-        
+
         # Execute in batches using the deployed function
         for i in range(0, len(scenario_tuples), batch_size):
             batch = scenario_tuples[i:i + batch_size]
-            
+
             try:
                 # Use the remote function's map interface
                 async for result in evaluate_fn.map.aio(batch):
@@ -74,20 +76,21 @@ class ArcModalAPI:
                         "trajectory": {},
                         "reliability_score": {"overall_score": 0}
                     }
-    
+
     @staticmethod
     def is_available() -> bool:
         """Check if deployed Modal app is available."""
         if not MODAL_AVAILABLE:
             return False
-            
+
         # Check if we're configured to use deployed app
         if not os.environ.get("ARC_USE_DEPLOYED_APP"):
             return False
-            
+
         try:
-            # Try to look up the function
-            modal.Function.lookup("arc-production", "evaluate_single_scenario")
+            # Try to find the deployed function
+            modal.Function.from_name("arc-production", "evaluate_single_scenario")
             return True
-        except:
+        except Exception:
             return False
+

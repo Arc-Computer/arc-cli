@@ -15,7 +15,6 @@ class DatabaseConnectionManager:
         """Initialize the connection manager."""
         self._client: ArcDBClient | None = None
         self._is_connected = False
-        self._connection_url = os.environ.get("TIMESCALE_SERVICE_URL")
     
     @property
     def is_available(self) -> bool:
@@ -28,7 +27,10 @@ class DatabaseConnectionManager:
         Returns:
             True if connection successful, False otherwise
         """
-        if not self._connection_url:
+        # Read connection URL at time of initialization
+        connection_url = os.environ.get("TIMESCALE_SERVICE_URL")
+        
+        if not connection_url:
             console.print(
                 "Database connection not configured. Running in file-only mode.",
                 style="warning"
@@ -36,10 +38,9 @@ class DatabaseConnectionManager:
             return False
             
         try:
-            self._client = ArcDBClient(connection_string=self._connection_url)
+            self._client = ArcDBClient(connection_string=connection_url)
             await self._client.initialize()
             self._is_connected = True
-            console.print("Database connection established", style="success")
             return True
         except Exception as e:
             console.print(

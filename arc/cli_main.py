@@ -8,18 +8,13 @@ from __future__ import annotations
 
 import importlib.metadata as _metadata
 import sys
-from pathlib import Path
-from typing import Optional
 
 import click
-from rich.console import Console
+from dotenv import load_dotenv
 from rich.panel import Panel
-from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, TimeRemainingColumn
-from rich.table import Table
-from rich.text import Text
 
-from arc.cli.commands import run, analyze, recommend, diff, validate, status
-from arc.cli.utils import ArcConsole, format_error, format_success
+from arc.cli.commands import analyze, diff, recommend, run, status, validate
+from arc.cli.utils import ArcConsole
 
 # Initialize Rich console with Arc styling
 console = ArcConsole()
@@ -44,16 +39,16 @@ def _get_version() -> str:
 @click.pass_context
 def main(ctx: click.Context) -> None:
     """Arc: Proactive Capability Assurance for AI Agents.
-    
+
     Test and improve your AI agents BEFORE production deployment.
-    
+
     \b
     Basic workflow:
       arc run agent.yaml      # Test agent with generated scenarios
       arc analyze            # Analyze failures from last run
       arc recommend          # Get improvement recommendations
       arc diff v1.yaml v2.yaml  # Compare agent versions
-    
+
     \b
     Examples:
       arc run finance_agent.yaml
@@ -61,6 +56,9 @@ def main(ctx: click.Context) -> None:
       arc recommend --json
       arc status
     """
+    # Load environment variables from .env file, but don't override existing ones
+    load_dotenv(override=False)
+
     if ctx.invoked_subcommand is None:
         # Show welcome message when no command is provided
         console.print()
@@ -87,4 +85,5 @@ main.add_command(status.status)
 
 
 if __name__ == "__main__":
-    sys.exit(main()) 
+    sys.exit(main())
+

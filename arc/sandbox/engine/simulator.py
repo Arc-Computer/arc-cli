@@ -13,21 +13,17 @@ import modal
 # Pydantic imports moved to ToolBehaviorEngine
 
 # Create Modal application
-# If running in a deployed environment, use the existing app
-# Otherwise create a new app for local development
-try:
-    if os.environ.get("MODAL_IDENTITY_TOKEN") or os.environ.get("MODAL_TASK_ID"):
-        # Inside Modal – prefer existing app, fall back if it doesn't exist
-        try:
-            app = modal.App.lookup("arc-production")
-        except Exception:  # modal.exceptions.NotFoundError or similar
-            app = modal.App("arc-production")
-    else:
-        # Local development – create new app
-        app = modal.App("arc-production")
-except Exception as e:
-    # Surface a clearer message to callers; don't explode at import-time
-    raise RuntimeError(f"Failed to initialise Modal app: {e}") from e
+# Support multiple deployment scenarios
+if os.environ.get("ARC_USE_DEPLOYED_APP"):
+    # Users accessing deployed app - no need to create app
+    # Function will be looked up directly via public API
+    app = modal.App("arc-production")
+elif os.environ.get("MODAL_IDENTITY_TOKEN") or os.environ.get("MODAL_TASK_ID"):
+    # Running inside Modal - use existing app context
+    app = modal.App.lookup("arc-production")
+else:
+    # Local development - create new app
+    app = modal.App("arc-production")
 
 # Get the project root directory
 project_root = os.path.dirname(

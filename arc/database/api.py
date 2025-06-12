@@ -11,14 +11,16 @@ import json
 import logging
 import uuid
 from datetime import datetime, timezone
-from typing import Dict, Any, List, Optional, Tuple
+from typing import Any, List, Optional, Tuple
 from enum import Enum
 
 from sqlalchemy import text
 
-from arc.database.client import ArcDBClient, DatabaseError, RetryableError, convert_row_to_dict
+from arc.database.client import ArcDBClient, DatabaseError, RetryableError
+from arc.database.utils import convert_row_to_dict
 
 logger = logging.getLogger(__name__)
+
 
 
 class SimulationStatus(Enum):

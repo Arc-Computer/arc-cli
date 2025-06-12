@@ -9,7 +9,7 @@ from __future__ import annotations
 import os
 import logging
 import asyncio
-from typing import AsyncIterator, Dict, List, Optional, Any, TypeVar, Callable
+from typing import AsyncIterator, List, Optional, Any, TypeVar, Callable
 from datetime import datetime, timedelta, timezone
 import json
 import hashlib
@@ -22,6 +22,8 @@ from sqlalchemy import text, select, insert, update, delete
 from sqlalchemy.exc import SQLAlchemyError, OperationalError, IntegrityError
 import asyncpg
 
+from .utils import convert_row_to_dict
+
 # Configure logging
 logger = logging.getLogger(__name__)
 
@@ -32,22 +34,6 @@ _engine: AsyncEngine | None = None
 # Type variable for retry decorator
 T = TypeVar('T')
 
-
-def convert_row_to_dict(row) -> dict[str, Any]:
-    """
-    Convert a database row to a dictionary, handling UUID conversion.
-    
-    AsyncPG returns UUID fields as special UUID objects that need to be
-    converted to strings for JSON serialization.
-    """
-    data = dict(row._mapping)
-    
-    # Convert any UUID fields to strings
-    for key, value in data.items():
-        if isinstance(value, uuid.UUID):  # Check if it's a UUID object
-            data[key] = str(value)
-    
-    return data
 
 
 class DatabaseError(Exception):

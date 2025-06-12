@@ -16,26 +16,9 @@ from enum import Enum
 
 from sqlalchemy import text
 
-from arc.database.client import ArcDBClient, DatabaseError, RetryableError
+from arc.database.client import ArcDBClient, DatabaseError, RetryableError, convert_row_to_dict
 
 logger = logging.getLogger(__name__)
-
-
-def convert_row_to_dict(row) -> Dict[str, Any]:
-    """
-    Convert a database row to a dictionary, handling UUID conversion.
-    
-    AsyncPG returns UUID fields as special UUID objects that need to be
-    converted to strings for JSON serialization.
-    """
-    data = dict(row._mapping)
-    
-    # Convert any UUID fields to strings
-    for key, value in data.items():
-        if hasattr(value, "hex"):  # Check if it's a UUID object
-            data[key] = str(value)
-    
-    return data
 
 
 class SimulationStatus(Enum):

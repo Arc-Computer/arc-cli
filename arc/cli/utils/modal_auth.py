@@ -28,7 +28,6 @@ def setup_modal_auth(
     if os.environ.get("MODAL_IDENTITY_TOKEN") or os.environ.get("MODAL_TASK_ID"):
         console.print("Running inside Modal workspace deployment", style="info")
         return True
-    
     # Method 2: Use provided tokens
     if token_id and token_secret:
         os.environ["MODAL_TOKEN_ID"] = token_id

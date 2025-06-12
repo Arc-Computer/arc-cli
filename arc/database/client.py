@@ -33,7 +33,7 @@ _engine: AsyncEngine | None = None
 T = TypeVar('T')
 
 
-def convert_row_to_dict(row) -> Dict[str, Any]:
+def convert_row_to_dict(row) -> dict[str, Any]:
     """
     Convert a database row to a dictionary, handling UUID conversion.
     
@@ -44,7 +44,7 @@ def convert_row_to_dict(row) -> Dict[str, Any]:
     
     # Convert any UUID fields to strings
     for key, value in data.items():
-        if hasattr(value, "hex"):  # Check if it's a UUID object
+        if isinstance(value, uuid.UUID):  # Check if it's a UUID object
             data[key] = str(value)
     
     return data

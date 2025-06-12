@@ -47,9 +47,9 @@ class ReliabilityScore:
             return "F"
 
 class ReliabilityScorer:
-    """Calculates reliability scores from agent execution trajectories"""
+    """Calculates reliability scores from agent execution trajectories with enhanced judge evaluation"""
     
-    def __init__(self):
+    def __init__(self, use_enhanced_judges: bool = True):
         self.weights = {
             ReliabilityDimension.TOOL_EXECUTION: 0.3,
             ReliabilityDimension.RESPONSE_QUALITY: 0.25,
@@ -57,13 +57,63 @@ class ReliabilityScorer:
             ReliabilityDimension.PERFORMANCE: 0.15,
             ReliabilityDimension.COMPLETENESS: 0.1
         }
+        self.use_enhanced_judges = use_enhanced_judges
+        
+        # Initialize enhanced judge ensemble if requested
+        if use_enhanced_judges:
+            try:
+                from .judge import CalibratedJudgeEnsemble
+                self.judge_ensemble = CalibratedJudgeEnsemble()
+            except ImportError:
+                self.judge_ensemble = None
+                self.use_enhanced_judges = False
+        else:
+            self.judge_ensemble = None
     
     def score_trajectory(
         self, 
         trajectory: Dict[str, Any],
         scenario: Optional[Dict[str, Any]] = None
     ) -> ReliabilityScore:
-        """Calculate reliability score from execution trajectory"""
+        """Calculate reliability score from execution trajectory with optional enhanced judge evaluation"""
+        
+        # Use enhanced judges if available
+        if self.use_enhanced_judges and self.judge_ensemble:
+            return self._score_with_enhanced_judges(trajectory, scenario)
+        else:
+            return self._score_with_heuristics(trajectory, scenario)
+    
+    async def score_trajectory_async(
+        self, 
+        trajectory: Dict[str, Any],
+        scenario: Optional[Dict[str, Any]] = None
+    ) -> ReliabilityScore:
+        """Async version that always uses enhanced judges if available"""
+        
+        if self.use_enhanced_judges and self.judge_ensemble:
+            try:
+                ensemble_result = await self.judge_ensemble.evaluate_trajectory(trajectory, scenario)
+                
+                # Convert ensemble evaluation to ReliabilityScore
+                return ReliabilityScore(
+                    overall_score=ensemble_result.overall_score,
+                    dimension_scores=ensemble_result.dimension_scores,
+                    issues_found=self._extract_issues_from_evaluation(ensemble_result),
+                    recommendations=self._generate_enhanced_recommendations(ensemble_result)
+                )
+            except Exception as e:
+                # Fallback to heuristic scoring if judge ensemble fails
+                print(f"Enhanced judge evaluation failed: {e}")
+                return self._score_with_heuristics(trajectory, scenario)
+        else:
+            return self._score_with_heuristics(trajectory, scenario)
+    
+    def _score_with_heuristics(
+        self, 
+        trajectory: Dict[str, Any],
+        scenario: Optional[Dict[str, Any]] = None
+    ) -> ReliabilityScore:
+        """Calculate reliability score using heuristic methods (original implementation)"""
         
         dimension_scores = {}
         issues = []
@@ -105,6 +155,81 @@ class ReliabilityScorer:
             issues_found=issues,
             recommendations=recommendations
         )
+    
+    def _score_with_enhanced_judges(
+        self, 
+        trajectory: Dict[str, Any],
+        scenario: Optional[Dict[str, Any]] = None
+    ) -> ReliabilityScore:
+        """Synchronous wrapper for enhanced judge scoring (fallback to heuristics)"""
+        
+        # For synchronous calls, fall back to heuristics since we can't await
+        return self._score_with_heuristics(trajectory, scenario)
+    
+    def _extract_issues_from_evaluation(self, ensemble_result) -> List[Dict[str, Any]]:
+        """Extract issues from enhanced judge evaluation"""
+        
+        issues = []
+        
+        # Convert judge reasoning to issues
+        for eval in ensemble_result.individual_evaluations:
+            if eval.confidence.value == "low":
+                issues.append({
+                    "severity": "medium",
+                    "dimension": "overall",
+                    "issue": f"Low confidence evaluation from {eval.judge_id}",
+                    "impact": -10,
+                    "judge_reasoning": eval.reasoning
+                })
+        
+        # Extract issues from chain of thought
+        for eval in ensemble_result.individual_evaluations:
+            for step in eval.chain_of_thought:
+                if "issue" in step.lower() or "problem" in step.lower():
+                    issues.append({
+                        "severity": "medium",
+                        "dimension": "judge_identified",
+                        "issue": step,
+                        "impact": -15,
+                        "source": "chain_of_thought"
+                    })
+        
+        return issues
+    
+    def _generate_enhanced_recommendations(self, ensemble_result) -> List[Dict[str, Any]]:
+        """Generate recommendations from enhanced judge evaluation"""
+        
+        recommendations = []
+        
+        # Find lowest scoring dimension
+        lowest_dim = min(ensemble_result.dimension_scores.items(), key=lambda x: x[1])
+        
+        if lowest_dim[1] < 70:  # If score is below 70
+            recommendations.append({
+                "dimension": lowest_dim[0],
+                "priority": "high" if lowest_dim[1] < 50 else "medium",
+                "recommendation": f"Improve {lowest_dim[0].replace('_', ' ')} capability",
+                "specific_actions": [
+                    ensemble_result.consensus_reasoning,
+                    f"Focus on {lowest_dim[0]} dimension scoring {lowest_dim[1]:.0f}/100"
+                ],
+                "judge_confidence": ensemble_result.calibration_quality
+            })
+        
+        # Add consensus-based recommendations
+        if ensemble_result.calibration_quality < 0.8:
+            recommendations.append({
+                "dimension": "evaluation_quality",
+                "priority": "medium",
+                "recommendation": "Improve evaluation consistency",
+                "specific_actions": [
+                    "Multiple judges showed disagreement",
+                    "Consider clearer success criteria",
+                    "Review evaluation methodology"
+                ]
+            })
+        
+        return recommendations
     
     def _score_tool_execution(
         self, 

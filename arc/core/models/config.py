@@ -3,7 +3,7 @@ Pydantic models for agent and tool configurations.
 """
 from typing import Any
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 class ToolConfig(BaseModel):
@@ -21,13 +21,11 @@ class AgentConfig(BaseModel):
     version_id: str | None = None # This will be assigned by the system
     system_prompt: str | None = Field(None, description="The system prompt for the agent.")
 
-    class Config:
-        """Pydantic configuration."""
-        extra = "allow" # Allow extra fields to be present in the config
+    model_config = ConfigDict(extra="allow")  # Allow extra fields to be present in the config
 
     def to_dict(self) -> dict[str, Any]:
         """Serializes the config to a dictionary."""
-        return self.dict(by_alias=True)
+        return self.model_dump(by_alias=True)
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "AgentConfig":
@@ -36,16 +34,16 @@ class AgentConfig(BaseModel):
 
     @field_validator('tools', mode='before')
     @classmethod
-    def validate_tools(cls, v):
+    def validate_tools(cls, v: Any) -> list[ToolConfig]:
         """Convert string tool names to ToolConfig objects."""
         if not isinstance(v, list):
-            return v
-        
+            raise ValueError("Tools must be a list")
+
         validated_tools = []
         for tool in v:
             if isinstance(tool, str):
                 # Convert string to ToolConfig
-                validated_tools.append(ToolConfig(name=tool))
+                validated_tools.append(ToolConfig(name=tool, description=None))
             elif isinstance(tool, dict):
                 # Convert dict to ToolConfig
                 validated_tools.append(ToolConfig(**tool))
@@ -55,5 +53,5 @@ class AgentConfig(BaseModel):
             else:
                 # Invalid format
                 raise ValueError(f"Tool must be a string, dict, or ToolConfig object, got {type(tool)}")
-        
-        return validated_tools 
+
+        return validated_tools

@@ -35,6 +35,7 @@ project_root = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(project_root))
 
 from arc.database.client import ArcDBClient
+from arc.database.utils import convert_row_to_dict
 
 
 class TimescaleDBTester:
@@ -304,7 +305,7 @@ class TimescaleDBTester:
                     WHERE hypertable_name IN ('outcomes', 'failure_patterns', 'tool_usage')
                 """))
                 
-                compression_stats = [dict(row._mapping) for row in result]
+                compression_stats = [convert_row_to_dict(row) for row in result]
             
             print(f"📦 Hypertable stats for {len(compression_stats)} tables")
             

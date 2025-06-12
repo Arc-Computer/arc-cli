@@ -11,12 +11,13 @@ import json
 import logging
 import uuid
 from datetime import datetime, timezone
-from typing import Dict, Any, List, Optional, Tuple
+from typing import Any, List, Optional, Tuple
 from enum import Enum
 
 from sqlalchemy import text
 
 from arc.database.client import ArcDBClient, DatabaseError, RetryableError
+from arc.database.utils import convert_row_to_dict
 
 logger = logging.getLogger(__name__)
 
@@ -62,13 +63,13 @@ class ArcAPI:
     async def start_simulation(
         self,
         config_version_id: str,
-        scenarios: List[Dict[str, Any]],
+        scenarios: List[dict[str, Any]],
         simulation_name: Optional[str] = None,
         modal_app_id: Optional[str] = None,
         modal_environment: str = "production",
         sandbox_instances: int = 1,
-        metadata: Optional[Dict[str, Any]] = None
-    ) -> Dict[str, Any]:
+        metadata: Optional[dict[str, Any]] = None
+    ) -> dict[str, Any]:
         """
         Start a new simulation run.
         
@@ -168,7 +169,7 @@ class ArcAPI:
     async def record_scenario_outcome(
         self,
         simulation_id: str,
-        scenario_result: Dict[str, Any],
+        scenario_result: dict[str, Any],
         modal_call_id: Optional[str] = None,
         sandbox_id: Optional[str] = None
     ) -> str:
@@ -279,7 +280,7 @@ class ArcAPI:
     async def record_batch_outcomes(
         self,
         simulation_id: str,
-        scenario_results: List[Dict[str, Any]],
+        scenario_results: List[dict[str, Any]],
         modal_call_ids: Optional[List[str]] = None
     ) -> List[str]:
         """
@@ -395,7 +396,7 @@ class ArcAPI:
         self,
         simulation_id: str,
         scenario: Any,
-        modal_result: Dict[str, Any],
+        modal_result: dict[str, Any],
         call_index: int = 0
     ) -> str:
         """
@@ -462,10 +463,10 @@ class ArcAPI:
         self,
         simulation_id: str,
         scenarios: List[Any],
-        modal_results: List[Dict[str, Any]],
+        modal_results: List[dict[str, Any]],
         execution_time: float,
         total_cost: float
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Complete a simulation using raw Modal results.
         
@@ -514,8 +515,8 @@ class ArcAPI:
     async def complete_simulation(
         self,
         simulation_id: str,
-        suite_result: Dict[str, Any]
-    ) -> Dict[str, Any]:
+        suite_result: dict[str, Any]
+    ) -> dict[str, Any]:
         """
         Mark a simulation as completed and record aggregate metrics.
         
@@ -578,7 +579,7 @@ class ArcAPI:
     
     # ==================== Query Methods ====================
     
-    async def get_simulation_status(self, simulation_id: str) -> Dict[str, Any]:
+    async def get_simulation_status(self, simulation_id: str) -> dict[str, Any]:
         """
         Get current status and progress of a simulation.
         
@@ -616,7 +617,7 @@ class ArcAPI:
                 if not row:
                     raise ValueError(f"Simulation {simulation_id} not found")
                 
-                data = dict(row._mapping)
+                data = convert_row_to_dict(row)
                 
                 # Calculate progress percentage
                 progress = (data["completed_scenarios"] / data["total_scenarios"] * 100) if data["total_scenarios"] > 0 else 0
@@ -648,7 +649,7 @@ class ArcAPI:
         simulation_id: str,
         scenario_id: Optional[str] = None,
         status_filter: Optional[str] = None
-    ) -> List[Dict[str, Any]]:
+    ) -> List[dict[str, Any]]:
         """
         Get outcomes for scenarios in a simulation.
         
@@ -699,7 +700,8 @@ class ArcAPI:
                 
                 outcomes = []
                 for row in result:
-                    data = dict(row._mapping)
+                    data = convert_row_to_dict(row)
+                    
                     # Parse JSON fields
                     data["trajectory"] = json.loads(data["trajectory"]) if data["trajectory"] else {}
                     data["metrics"] = json.loads(data["metrics"]) if data["metrics"] else {}

@@ -623,6 +623,10 @@ async def _check_modal_available(max_retries: int = 3) -> bool:
         auth_configured = setup_modal_auth()
 
         if not auth_configured:
+            # Check if we might be in a deployed environment with different auth
+            if os.environ.get("ARC_MODAL_APP_ID") or os.environ.get("MODAL_ENVIRONMENT"):
+                console.print(format_warning("Modal authentication may be handled by deployment"))
+                return True
             console.print(format_warning("Modal not authenticated"))
             console.print(get_modal_auth_instructions())
             return False
@@ -666,7 +670,14 @@ async def _execute_with_streaming_analysis(
 
     # Check Modal availability
     modal_configured = await _check_modal_available()
-    use_modal = state.config.get("use_modal", False) and modal_configured
+    
+    # Allow forcing local execution via environment variable
+    force_local = os.environ.get("ARC_FORCE_LOCAL", "").lower() in ["true", "1", "yes"]
+    if force_local:
+        console.print(format_warning("Forcing local execution (ARC_FORCE_LOCAL=true)"))
+        use_modal = False
+    else:
+        use_modal = state.config.get("use_modal", False) and modal_configured
 
     if state.config.get("use_modal", False) and not modal_configured:
         console.print(
@@ -935,6 +946,19 @@ async def _execute_modal_with_streaming(
         # Handle Modal app context errors
         error_msg = str(e)
         console.print(format_error(f"Modal app initialization failed: {error_msg}"))
+        
+        # Provide more detailed error information
+        if "Token ID is malformed" in error_msg:
+            console.print(format_warning("\nModal authentication issue detected."))
+            console.print("This can happen when:")
+            console.print("  • Modal tokens have expired")
+            console.print("  • Using incompatible token format")
+            console.print("  • Token was corrupted during copy/paste")
+            console.print("\nTo fix:")
+            console.print("  1. Clear existing tokens: unset MODAL_TOKEN_ID MODAL_TOKEN_SECRET")
+            console.print("  2. Re-authenticate: modal token new")
+            console.print("  3. Or use Arc demo tokens if provided")
+        
         # Return empty results with error
         execution_time = time.time() - start_time
         return [], execution_time, 0.0

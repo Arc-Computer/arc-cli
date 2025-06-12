@@ -280,6 +280,11 @@ async def _run_impl(
 
         # Execute with streaming analysis and intelligence
         if use_modal and orchestrator:
+            # Re-estimate cost based on actual number of generated scenarios
+            estimated_cost = orchestrator._estimate_execution_cost(len(generated_scenarios), agent_config.model)
+            if not json_output:
+                console.print(f"Estimated cost: ${estimated_cost:.4f}", style="muted")
+
             results, execution_time, actual_cost = await _execute_with_orchestrator(
                 scenarios=generated_scenarios,
                 agent_config=agent_config,
@@ -302,6 +307,7 @@ async def _run_impl(
 
         # Step 5: Analyze results with progress feedback
         if not json_output:
+            console.print()
             console.print("[bold blue]📈 Analyzing Results[/bold blue]")
         
         with Progress(
@@ -790,8 +796,8 @@ async def _execute_with_orchestrator(
         total_cost = 0.0
         
         if not json_output:
-            console.print("[bold blue]🚀 Initializing Modal Orchestrator[/bold blue]")
-            console.print()
+            if os.environ.get("ARC_USE_DEPLOYED_APP"):
+                console.print("Executing on deployed Modal app...", style="info")
             
             # Create Rich Progress for clean tree-structured display
             with Progress(

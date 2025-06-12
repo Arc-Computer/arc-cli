@@ -4,10 +4,13 @@ Manages pattern selection, instantiation, and quality control.
 """
 
 import asyncio
+import logging
 from typing import List, Dict, Any, Optional, Tuple
 from datetime import datetime
 from dataclasses import dataclass, field
 import os
+
+logger = logging.getLogger(__name__)
 
 from ..core.models.scenario import Scenario
 from .failure_patterns import PatternLibrary
@@ -16,11 +19,15 @@ from .pattern_selector import PatternSelector
 from .scenario_instantiator import ScenarioInstantiator
 from .quality_scorer import ScenarioQualityScorer
 from .deduplicator import ScenarioDeduplicator
+from .trail_loader import TrailDatasetLoader
+from .trail_adapter import TrailPatternAdapter
+from .pattern_library import EnhancedPatternLibrary
+from .quality_validator import TrailQualityValidator
 
 
 @dataclass
 class GenerationMetrics:
-    """Metrics for scenario generation."""
+    """Enhanced metrics for scenario generation with TRAIL integration."""
     total_scenarios_requested: int
     total_scenarios_generated: int = 0
     patterns_selected: List[str] = field(default_factory=list)
@@ -32,6 +39,12 @@ class GenerationMetrics:
     instantiation_time: float = 0.0
     quality_scoring_time: float = 0.0
     estimated_cost: float = 0.0
+    # TRAIL-specific metrics
+    trail_patterns_used: int = 0
+    currency_scenarios_generated: int = 0
+    trail_scenarios_generated: int = 0
+    adaptation_metrics: Dict[str, Any] = field(default_factory=dict)
+    assumption_coverage: Dict[str, int] = field(default_factory=dict)
     
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary."""
@@ -52,38 +65,62 @@ class GenerationMetrics:
             "efficiency": {
                 "success_rate": round(self.scenarios_passed_quality / max(self.total_scenarios_generated, 1), 2),
                 "scenarios_per_second": round(self.total_scenarios_generated / max(self.generation_time_seconds, 1), 2)
+            },
+            # TRAIL-specific metrics
+            "trail_integration": {
+                "trail_patterns_used": self.trail_patterns_used,
+                "currency_scenarios": self.currency_scenarios_generated,
+                "trail_scenarios": self.trail_scenarios_generated,
+                "adaptation_metrics": self.adaptation_metrics,
+                "assumption_coverage": self.assumption_coverage
             }
         }
 
 
 class GenerationCoordinator:
-    """Coordinates the two-stage scenario generation pipeline."""
+    """Enhanced coordination for scenario generation with TRAIL integration."""
     
     def __init__(
         self,
         api_key: Optional[str] = None,
         use_llm: bool = True,
-        quality_threshold: float = 3.0,
+        quality_threshold: float = 0.7,
         patterns_per_batch: int = 3,
-        scenarios_per_pattern: int = 7
+        scenarios_per_pattern: int = 7,
+        enable_trail: bool = True,
+        random_seed: Optional[int] = None
     ):
-        """Initialize the generation coordinator.
+        """Initialize the enhanced generation coordinator.
         
         Args:
             api_key: OpenRouter API key
             use_llm: Whether to use LLM for generation
-            quality_threshold: Minimum quality score
+            quality_threshold: Minimum quality score (0.0-1.0)
             patterns_per_batch: Number of patterns per batch
             scenarios_per_pattern: Scenarios to generate per pattern
+            enable_trail: Whether to enable TRAIL integration
+            random_seed: Seed for reproducible generation
         """
         self.api_key = api_key or os.getenv("OPENROUTER_API_KEY")
         self.use_llm = use_llm and bool(self.api_key)
         self.quality_threshold = quality_threshold
         self.patterns_per_batch = patterns_per_batch
         self.scenarios_per_pattern = scenarios_per_pattern
+        self.enable_trail = enable_trail
         
-        # Initialize components
-        self.pattern_library = PatternLibrary()
+        # Initialize enhanced components
+        if enable_trail:
+            self.pattern_library = EnhancedPatternLibrary()
+            self.trail_loader = TrailDatasetLoader()
+            self.trail_adapter = TrailPatternAdapter(self.trail_loader, random_seed)
+            self.quality_validator = None  # Will be initialized after TRAIL loading
+        else:
+            # Fallback to basic components
+            self.pattern_library = PatternLibrary()
+            self.trail_loader = None
+            self.trail_adapter = None
+            self.quality_validator = None
+        
         self.assumption_extractor = AssumptionExtractor()
         self.pattern_selector = PatternSelector(
             self.pattern_library,
@@ -98,6 +135,9 @@ class GenerationCoordinator:
         self.quality_scorer = ScenarioQualityScorer(min_threshold=self.quality_threshold)
         self.deduplicator = ScenarioDeduplicator()
         
+        # Track initialization state
+        self._trail_initialized = False
+        
         # Cost estimation (rough estimates per call)
         self.cost_estimates = {
             "pattern_selection_llm": 0.0002,  # GPT-4.1-mini
@@ -106,6 +146,33 @@ class GenerationCoordinator:
             "scenario_instantiation_adapter": 0.0
         }
     
+    async def _ensure_trail_initialized(self) -> None:
+        """Ensure TRAIL components are initialized."""
+        if not self.enable_trail or self._trail_initialized:
+            return
+        
+        try:
+            # Initialize enhanced pattern library with TRAIL data
+            await self.pattern_library.initialize()
+            
+            # Initialize quality validator with TRAIL patterns
+            trail_patterns = self.trail_loader.get_all_patterns()
+            self.quality_validator = TrailQualityValidator(
+                quality_threshold=self.quality_threshold,
+                trail_patterns=trail_patterns
+            )
+            
+            self._trail_initialized = True
+            logger.info(f"TRAIL integration initialized with {len(trail_patterns)} patterns")
+            
+        except Exception as e:
+            logger.warning(f"Failed to initialize TRAIL components: {e}")
+            # Graceful fallback to basic components
+            self.enable_trail = False
+            if hasattr(self, 'pattern_library') and hasattr(self.pattern_library, '__class__'):
+                if 'Enhanced' in self.pattern_library.__class__.__name__:
+                    self.pattern_library = PatternLibrary()
+    
     async def generate_scenarios(
         self,
         agent_config: Dict[str, Any],
@@ -113,7 +180,7 @@ class GenerationCoordinator:
         focus_on_assumptions: bool = True,
         currency_focus: bool = False
     ) -> Tuple[List[Scenario], GenerationMetrics]:
-        """Generate scenarios using the two-stage pipeline.
+        """Generate scenarios using enhanced pipeline with TRAIL integration.
         
         Args:
             agent_config: Agent configuration
@@ -126,6 +193,9 @@ class GenerationCoordinator:
         """
         start_time = datetime.now()
         metrics = GenerationMetrics(total_scenarios_requested=total_scenarios)
+        
+        # Ensure TRAIL components are initialized
+        await self._ensure_trail_initialized()
         
         # Extract assumptions
         assumptions = self.assumption_extractor.extract(agent_config)
@@ -268,6 +338,9 @@ class GenerationCoordinator:
                     scenario.tags.append("currency")
                 scenario.tags.append("assumption_violation")
             
+            # Update TRAIL-specific metrics
+            metrics.currency_scenarios_generated = len(scenarios)
+            
             return scenarios, metrics
             
         finally:
@@ -280,7 +353,7 @@ class GenerationCoordinator:
         agent_config: Dict[str, Any],
         count: int = 35
     ) -> Tuple[List[Scenario], GenerationMetrics]:
-        """Generate TRAIL-inspired general capability test scenarios.
+        """Generate TRAIL-based general capability test scenarios.
         
         Args:
             agent_config: Agent configuration
@@ -289,36 +362,119 @@ class GenerationCoordinator:
         Returns:
             Tuple of (scenarios, metrics)
         """
-        # Ensure diverse coverage across TRAIL categories
-        original_patterns = self.patterns_per_batch
+        start_time = datetime.now()
+        metrics = GenerationMetrics(total_scenarios_requested=count)
         
-        self.patterns_per_batch = 5  # More patterns for diversity
+        # Ensure TRAIL components are initialized
+        await self._ensure_trail_initialized()
+        
+        if not self.enable_trail or not self.trail_adapter:
+            # Fallback to original implementation
+            logger.warning("TRAIL not available, falling back to basic generation")
+            return await self._generate_trail_fallback(agent_config, count)
+        
+        try:
+            # Extract assumptions for adaptation
+            assumptions = self.assumption_extractor.extract(agent_config)
+            
+            # Use TRAIL adapter to create assumption violation scenarios
+            adaptation_result = await self.trail_adapter.adapt_patterns_to_assumptions(
+                assumptions=assumptions,
+                agent_config=agent_config,
+                target_count=count,
+                focus_types=["reasoning", "execution", "planning"]
+            )
+            
+            scenarios = adaptation_result.scenarios
+            
+            # Update metrics with TRAIL-specific data
+            metrics.trail_scenarios_generated = len(scenarios)
+            metrics.trail_patterns_used = len(adaptation_result.adaptations_used)
+            metrics.adaptation_metrics = adaptation_result.adaptation_metrics
+            
+            # Track assumption coverage
+            for adaptation in adaptation_result.adaptations_used:
+                assumption_type = adaptation.assumption_type
+                metrics.assumption_coverage[assumption_type] = (
+                    metrics.assumption_coverage.get(assumption_type, 0) + 1
+                )
+            
+            # Apply quality validation if available
+            if self.quality_validator:
+                validated_scenarios = []
+                for scenario in scenarios:
+                    quality_result = self.quality_validator.validate_scenario(scenario)
+                    
+                    # Add quality metrics to scenario metadata
+                    scenario.metadata["quality_result"] = quality_result.to_dict()
+                    
+                    if quality_result.passed_threshold:
+                        validated_scenarios.append(scenario)
+                        metrics.scenarios_passed_quality += 1
+                    else:
+                        metrics.scenarios_failed_quality += 1
+                
+                scenarios = validated_scenarios
+            else:
+                # Use basic quality check
+                for scenario in scenarios:
+                    if len(scenario.description) > 20 and len(scenario.instructions) > 30:
+                        metrics.scenarios_passed_quality += 1
+                    else:
+                        metrics.scenarios_failed_quality += 1
+            
+            # Deduplication
+            seen_hashes = set()
+            deduplicated_scenarios = []
+            for scenario in scenarios:
+                scenario_hash = self.deduplicator.get_scenario_hash(scenario)
+                if scenario_hash not in seen_hashes:
+                    seen_hashes.add(scenario_hash)
+                    deduplicated_scenarios.append(scenario)
+                else:
+                    metrics.duplicates_removed += 1
+            
+            scenarios = deduplicated_scenarios[:count]  # Limit to requested count
+            
+            # Final metrics
+            metrics.total_scenarios_generated = len(scenarios)
+            metrics.generation_time_seconds = (datetime.now() - start_time).total_seconds()
+            
+            logger.info(f"Generated {len(scenarios)} TRAIL-based scenarios using {metrics.trail_patterns_used} patterns")
+            
+            return scenarios, metrics
+            
+        except Exception as e:
+            logger.error(f"TRAIL scenario generation failed: {e}")
+            # Fallback to basic generation
+            return await self._generate_trail_fallback(agent_config, count)
+    
+    async def _generate_trail_fallback(
+        self,
+        agent_config: Dict[str, Any],
+        count: int
+    ) -> Tuple[List[Scenario], GenerationMetrics]:
+        """Fallback implementation when TRAIL is not available."""
+        # Use original implementation as fallback
+        original_patterns = self.patterns_per_batch
+        self.patterns_per_batch = 5
         
         try:
             scenarios, metrics = await self.generate_scenarios(
                 agent_config,
                 total_scenarios=count,
-                focus_on_assumptions=False,  # General capability testing
+                focus_on_assumptions=False,
                 currency_focus=False
             )
             
-            # Tag all scenarios as TRAIL-inspired
+            # Tag as fallback scenarios
             for scenario in scenarios:
-                scenario.tags.append("trail_inspired")
-                
-                # Add TRAIL category tags based on pattern
-                pattern_category = scenario.metadata.get("pattern_category", "")
-                if pattern_category in ["data", "logic", "calculation"]:
-                    scenario.tags.append("reasoning_error")
-                elif pattern_category in ["infrastructure", "auth", "security"]:
-                    scenario.tags.append("execution_error")
-                elif pattern_category in ["navigation", "temporal", "multi_agent"]:
-                    scenario.tags.append("planning_error")
+                scenario.tags.append("trail_fallback")
+                scenario.tags.append("general_capability")
             
             return scenarios, metrics
             
         finally:
-            # Restore original parameters
             self.patterns_per_batch = original_patterns
     
     def estimate_generation_time(self, total_scenarios: int) -> Dict[str, float]:

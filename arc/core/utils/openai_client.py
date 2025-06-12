@@ -15,10 +15,11 @@ logger = logging.getLogger(__name__)
 
 class BackgroundTaskStatus(Enum):
     """Status of a background reasoning task."""
-    PENDING = "pending"
+    QUEUED = "queued"
     IN_PROGRESS = "in_progress"
     COMPLETED = "completed"
     FAILED = "failed"
+    CANCELLED = "cancelled"
 
 
 @dataclass
@@ -50,34 +51,32 @@ class OpenAIBackgroundClient:
     async def create_background_analysis(
         self,
         prompt: str,
-        model: str = "o3",
-        max_reasoning_tokens: int = 100000,
-        temperature: float = 0.7
+        model: str = "o3"
     ) -> str:
         """Create a background reasoning task with o3.
         
         Args:
             prompt: Analysis prompt for the o3 model
-            model: Model to use (o3 or o3-mini)
-            max_reasoning_tokens: Maximum tokens for reasoning phase
-            temperature: Sampling temperature
+            model: Model to use (o3 or o4-mini)
             
         Returns:
             Task ID for polling
         """
         try:
-            response = await self.client.chat.completions.create(
-                model=model,
-                messages=[
-                    {
-                        "role": "user",
-                        "content": prompt
-                    }
-                ],
-                background=True,
-                max_reasoning_tokens=max_reasoning_tokens,
-                temperature=temperature
-            )
+            # Build request parameters
+            request_params = {
+                "model": model,
+                "input": prompt,
+                "background": True,
+                "store": True
+            }
+            
+            # Note: max_reasoning_tokens parameter may not be supported yet
+            # Keeping it for future compatibility when available
+            # if model.startswith("o3"):
+            #     request_params["max_reasoning_tokens"] = max_reasoning_tokens
+            
+            response = await self.client.responses.create(**request_params)
             
             task_id = response.id
             
@@ -86,7 +85,7 @@ class OpenAIBackgroundClient:
             
             task = BackgroundTask(
                 task_id=task_id,
-                status=BackgroundTaskStatus.PENDING,
+                status=BackgroundTaskStatus.QUEUED,
                 created_at=time.time(),
                 cost_estimate=cost_estimate
             )
@@ -133,7 +132,7 @@ class OpenAIBackgroundClient:
                         task.status = BackgroundTaskStatus.COMPLETED
                         task.completed_at = time.time()
                         task.result = {
-                            "content": response.output.content,
+                            "content": response.output_text,
                             "usage": response.usage.__dict__ if hasattr(response, 'usage') else None
                         }
                         logger.info(f"Task {task_id} completed in {task.completed_at - task.created_at:.1f}s")
@@ -143,6 +142,13 @@ class OpenAIBackgroundClient:
                         task.error = getattr(response, 'error', 'Unknown error')
                         logger.error(f"Task {task_id} failed: {task.error}")
                         return task
+                    elif response.status == 'cancelled':
+                        task.status = BackgroundTaskStatus.CANCELLED
+                        task.error = 'Task was cancelled'
+                        logger.info(f"Task {task_id} was cancelled")
+                        return task
+                    elif response.status == 'queued':
+                        task.status = BackgroundTaskStatus.QUEUED
                     else:
                         task.status = BackgroundTaskStatus.IN_PROGRESS
                 
@@ -164,6 +170,34 @@ class OpenAIBackgroundClient:
         
         return self.active_tasks[task_id]
     
+    async def cancel_task(self, task_id: str) -> BackgroundTask:
+        """Cancel a background task.
+        
+        Args:
+            task_id: ID of the task to cancel
+            
+        Returns:
+            Updated BackgroundTask with cancelled status
+        """
+        if task_id not in self.active_tasks:
+            raise ValueError(f"Unknown task ID: {task_id}")
+        
+        try:
+            # Cancel the task via API
+            await self.client.responses.cancel(task_id)
+            
+            # Update local task status
+            task = self.active_tasks[task_id]
+            task.status = BackgroundTaskStatus.CANCELLED
+            task.error = "Task cancelled by user"
+            
+            logger.info(f"Task {task_id} cancelled")
+            return task
+            
+        except Exception as e:
+            logger.error(f"Failed to cancel task {task_id}: {str(e)}")
+            raise
+    
     def _estimate_cost(self, prompt: str, model: str) -> float:
         """Estimate cost for background task.
         
@@ -181,8 +215,8 @@ class OpenAIBackgroundClient:
         if model == "o3":
             input_cost_per_million = 2.00
             output_cost_per_million = 8.00
-        elif model == "o3-mini":
-            # Estimated pricing for o3-mini (not yet available)
+        elif model == "o4-mini":
+            # Estimated pricing for o4-mini (not yet available)
             input_cost_per_million = 0.20
             output_cost_per_million = 0.80
         else:
@@ -208,7 +242,7 @@ class OpenAIBackgroundClient:
         
         to_remove = []
         for task_id, task in self.active_tasks.items():
-            if (task.status in [BackgroundTaskStatus.COMPLETED, BackgroundTaskStatus.FAILED] and
+            if (task.status in [BackgroundTaskStatus.COMPLETED, BackgroundTaskStatus.FAILED, BackgroundTaskStatus.CANCELLED] and
                 task.created_at < cutoff_time):
                 to_remove.append(task_id)
         

@@ -86,9 +86,7 @@ class AdvancedFailureAnalyzer:
             # Start background task
             task_id = await self.client.create_background_analysis(
                 prompt=prompt,
-                model=self.model,
-                max_reasoning_tokens=100000,
-                temperature=0.3  # Lower temperature for more focused analysis
+                model=self.model
             )
             
             # Poll for completion
@@ -395,8 +393,7 @@ Focus on scenarios that would be difficult for current testing approaches to dis
     try:
         task_id = await client.create_background_analysis(
             prompt=prompt,
-            model=model,
-            temperature=0.8  # Higher temperature for creative scenario generation
+            model=model
         )
         
         task = await client.poll_task(task_id)

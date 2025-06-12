@@ -1,7 +1,7 @@
 """
 Pydantic models for agent and tool configurations.
 """
-from typing import Any, Dict, List, Optional, Union
+from typing import Any
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -9,28 +9,28 @@ from pydantic import BaseModel, Field, field_validator
 class ToolConfig(BaseModel):
     """Configuration for a single tool."""
     name: str = Field(..., description="The name of the tool.")
-    description: Optional[str] = Field(None, description="A description of what the tool does.")
-    parameters: Dict[str, Any] = Field(default_factory=dict, description="The parameters the tool accepts, in JSON schema format.")
+    description: str | None = Field(None, description="A description of what the tool does.")
+    parameters: dict[str, Any] = Field(default_factory=dict, description="The parameters the tool accepts, in JSON schema format.")
 
 
 class AgentConfig(BaseModel):
     """Represents the complete configuration for an agent."""
     model: str = Field(..., description="The name of the language model to use (e.g., 'openai/gpt-4.1').")
     temperature: float = Field(0.0, description="The sampling temperature for the model.")
-    tools: List[ToolConfig] = Field(default_factory=list, description="A list of tools available to the agent.")
-    version_id: Optional[str] = None # This will be assigned by the system
-    system_prompt: Optional[str] = Field(None, description="The system prompt for the agent.")
+    tools: list[ToolConfig] = Field(default_factory=list, description="A list of tools available to the agent.")
+    version_id: str | None = None # This will be assigned by the system
+    system_prompt: str | None = Field(None, description="The system prompt for the agent.")
 
     class Config:
         """Pydantic configuration."""
         extra = "allow" # Allow extra fields to be present in the config
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Serializes the config to a dictionary."""
         return self.dict(by_alias=True)
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "AgentConfig":
+    def from_dict(cls, data: dict[str, Any]) -> "AgentConfig":
         """Deserializes a dictionary into an AgentConfig object."""
         return cls(**data)
 

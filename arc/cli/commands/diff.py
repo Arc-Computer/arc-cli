@@ -139,7 +139,7 @@ async def _diff_async(config1: str, config2: str, scenarios: int, historical: bo
     # Execute both configurations
     use_modal = modal and _check_modal_available()
     
-    orchestrator = ModalOrchestrator(db_client=db_manager.client if db_connected else None, console=console)
+    orchestrator = ModalOrchestrator(db_client=db_manager.get_client() if db_connected else None, console=console)
     
     if not json_output:
         console.print()
@@ -283,7 +283,7 @@ async def _diff_async(config1: str, config2: str, scenarios: int, historical: bo
 
             # Statistical analysis panel
             if analysis:
-                _display_statistical_analysis(analysis)
+                _display_statistical_analysis(analysis, reliability_a)
 
             # Historical context panel
             if historical_comparisons:
@@ -337,7 +337,7 @@ async def _execute_config(
         return results, exec_time, cost
 
 
-def _display_statistical_analysis(analysis: Dict[str, Any]):
+def _display_statistical_analysis(analysis: Dict[str, Any], reliability_a: float):
     """Display statistical analysis in a rich panel."""
     # Display statistical warnings
     statistical_warnings = analysis.get("statistical_warnings", [])

@@ -182,6 +182,9 @@ async def _run_impl(
                 "normalizer_enhancements": [],
             }
 
+        # Create AgentConfig from normalized configuration
+        agent_config = AgentConfig.model_validate(normalized_config)
+        
         # Step 2: Initialize Modal orchestrator if available
         use_modal = not no_modal and await _check_modal_available()
         if use_modal:
@@ -1208,43 +1211,44 @@ async def _execute_simulation_with_streaming(
             "[warning]Modal not configured - simulating execution with intelligence analysis[/warning]"
         )
         console.print()
-
-        # Simulate with live updates
-        progress = execution_loader.create_execution_progress(len(scenarios))
-        task = progress.add_task("Simulating scenarios...", total=len(scenarios))
-
-        for i, scenario in enumerate(scenarios):
-            # Simulate execution time
-            await asyncio.sleep(0.02)
-
-            # Generate mock result with currency assumption focus
-            is_currency = "currency" in str(scenario).lower()
-            success = not (is_currency and i < 15)  # First 15 currency scenarios fail
-
-            result = {
-                "scenario_id": scenario.get("scenario_id", f"scenario_{i}")
-                if isinstance(scenario, dict)
-                else getattr(scenario, "scenario_id", f"scenario_{i}"),
-                "success": success,
-                "execution_time": 0.5 + (i * 0.01),
-                "failure_reason": "Currency assumption violation: Expected multi-currency support"
-                if not success
-                else None,
-                "assumptions_detected": [
-                    {
-                        "type": "currency",
-                        "severity": "high",
-                        "confidence": 85,
-                        "description": "Agent assumes USD for all transactions without validation",
-                        "suggested_fix": "Add currency validation and conversion tools",
-                        "business_impact": "Financial calculation errors affecting customer billing",
-                    }
-                ]
-                if not success
-                else [],
-            }
-            results.append(result)
-            progress.update(task, advance=1)
+        
+        # Simulate with live updates using Rich Progress
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            BarColumn(),
+            TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
+            TimeRemainingColumn(),
+            console=console,
+        ) as progress:
+            task = progress.add_task("Simulating scenarios...", total=len(scenarios))
+            
+            for i, scenario in enumerate(scenarios):
+                # Simulate execution time
+                await asyncio.sleep(0.02)
+                
+                # Generate mock result with currency assumption focus
+                is_currency = "currency" in str(scenario).lower()
+                success = not (is_currency and i < 15)  # First 15 currency scenarios fail
+                
+                result = {
+                    "scenario_id": scenario.get("scenario_id", f"scenario_{i}") if isinstance(scenario, dict) else getattr(scenario, "scenario_id", f"scenario_{i}"),
+                    "success": success,
+                    "execution_time": 0.5 + (i * 0.01),
+                    "failure_reason": "Currency assumption violation: Expected multi-currency support" if not success else None,
+                    "assumptions_detected": [
+                        {
+                            "type": "currency",
+                            "severity": "high",
+                            "confidence": 85,
+                            "description": "Agent assumes USD for all transactions without validation",
+                            "suggested_fix": "Add currency validation and conversion tools",
+                            "business_impact": "Financial calculation errors affecting customer billing"
+                        }
+                    ] if not success else []
+                }
+                results.append(result)
+                progress.update(task, advance=1)
     else:
         # Silent simulation for JSON output
         for i, scenario in enumerate(scenarios):

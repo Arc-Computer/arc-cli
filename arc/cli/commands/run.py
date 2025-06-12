@@ -38,12 +38,12 @@ from arc.cli.utils.modal_auth import (
     get_modal_auth_instructions,
     setup_modal_auth,
 )
-from arc.core.models.scenario import Scenario
 from arc.core.models.config import AgentConfig
+from arc.core.models.scenario import Scenario
 from arc.ingestion.normalizer import ConfigNormalizer
 from arc.ingestion.parser import AgentConfigParser
 from arc.scenarios.generator import ScenarioGenerator
-from arc.simulation.modal_orchestrator import ModalOrchestrator, ProgressUpdate
+from arc.simulation.modal_orchestrator import ModalOrchestrator
 
 console = ArcConsole()
 # Will be initialized with database connection if available
@@ -184,7 +184,7 @@ async def _run_impl(
 
         # Create AgentConfig from normalized configuration
         agent_config = AgentConfig.model_validate(normalized_config)
-        
+
         # Step 2: Initialize Modal orchestrator if available
         use_modal = not no_modal and await _check_modal_available()
         if use_modal:
@@ -255,7 +255,7 @@ async def _run_impl(
         # Fallback cost estimation if not provided
         if actual_cost == 0.0:
             actual_cost = estimated_cost
-        
+
         # Step 5: Calculate results
         success_count = sum(1 for r in results if r.get("success"))
         failure_count = len(results) - success_count
@@ -320,9 +320,9 @@ async def _run_impl(
             table = Table(show_header=False, box=None)
             table.add_column("Metric", style="muted")
             table.add_column("Value", style="bright_cyan")
-            
+
             table.add_row("Overall Reliability", f"{reliability_score:.1%} ({success_count}/{len(results)} scenarios)")
-            
+
             # Show assumption violations discovered
             if assumption_violations:
                 try:
@@ -656,13 +656,11 @@ async def _check_modal_available(max_retries: int = 3) -> bool:
                     return True
             except ImportError:
                 pass
-        
-        import modal
 
         # First check if Modal package is properly installed
         try:
             # Test import of required components
-            from arc.sandbox.engine.simulator import app as modal_app
+            from arc.sandbox.engine.simulator import app  # noqa: F401
         except ImportError as e:
             console.print(
                 format_warning(f"Modal components not properly installed: {e}")
@@ -706,19 +704,19 @@ async def _execute_with_orchestrator(
 ) -> tuple[list[dict[str, Any]], float, float]:
     """Execute scenarios using the Modal orchestrator with real-time progress."""
     start_time = time.time()
-    
+
     if not json_output:
         console.print("[bold blue]🚀 Initializing Modal Orchestrator[/bold blue]")
         console.print()
-    
+
     try:
         # Initialize intelligence components
         assumption_detector = AssumptionDetector()
-        
+
         # Use the orchestrator with real-time progress display
         results = []
         total_cost = 0.0
-        
+
         async for progress_update in orchestrator.execute_with_persistence(
             agent_config=agent_config,
             scenarios=scenarios,
@@ -727,13 +725,13 @@ async def _execute_with_orchestrator(
             if not json_output:
                 # Display real-time progress as specified in PR description
                 progress_bar = "█" * int(progress_update.progress_pct * 20) + "░" * (20 - int(progress_update.progress_pct * 20))
-                
+
                 console.print(f"\r[bold green]Progress:[/bold green] [{progress_bar}] " +
                             f"{progress_update.completed}/{progress_update.total} scenarios " +
                             f"| [bold blue]Active Containers:[/bold blue] {progress_update.active_containers} " +
                             f"| [bold yellow]Cost:[/bold yellow] ${progress_update.current_cost:.4f} " +
                             f"| {progress_update.status_message}", end="")
-            
+
             # Process results as they come in
             if progress_update.latest_result:
                 # Add intelligence analysis
@@ -744,21 +742,21 @@ async def _execute_with_orchestrator(
                 )
                 results.append(result)
                 total_cost = progress_update.current_cost
-        
+
         if not json_output:
             console.print()  # New line after progress
             console.print(f"[bold green]✅ Execution completed![/bold green] Final cost: ${total_cost:.4f}")
             console.print()
-        
+
         execution_time = time.time() - start_time
         return results, execution_time, total_cost
-        
+
     except Exception as e:
         if not json_output:
             console.print()  # New line
             console.print(f"[bold red]❌ Orchestrator failed:[/bold red] {str(e)}")
             console.print("[bold yellow]⚡ Falling back to direct execution...[/bold yellow]")
-        
+
         # Fall back to the streaming analysis
         return await _execute_with_streaming_analysis(
             scenarios=scenarios,
@@ -789,10 +787,10 @@ async def _execute_with_streaming_analysis(
     funnel_analyzer = FunnelAnalyzer()
     assumption_detector = AssumptionDetector()
     execution_loader = ExecutionProgressLoader(console)
-    
+
     # Check Modal availability
     modal_configured = await _check_modal_available()
-    
+
     # Allow forcing local execution via environment variable
     force_local = os.environ.get("ARC_FORCE_LOCAL", "").lower() in ["true", "1", "yes"]
     if force_local:
@@ -812,7 +810,7 @@ async def _execute_with_streaming_analysis(
         # Execute with Modal + streaming analysis (using orchestrator)
         return await _execute_modal_with_streaming(
             scenarios, agent_config, agent_profile,
-            funnel_analyzer, assumption_detector, execution_loader, 
+            funnel_analyzer, assumption_detector, execution_loader,
             json_output
         )
     else:
@@ -841,8 +839,6 @@ async def _execute_modal_with_streaming(
 ) -> tuple[list[dict[str, Any]], float, float]:
     """Execute Modal scenarios with real-time streaming intelligence."""
     try:
-        import modal
-
         from arc.sandbox.engine.simulator import (
             app as modal_app,
         )
@@ -948,14 +944,14 @@ async def _execute_modal_with_streaming(
                         remaining_scenarios = len(scenarios) - len(results)
                         max_containers = min(50, len(scenarios))  # Modal max is 50
                         active_containers = min(remaining_scenarios, len(batch), max_containers)
-                        
+
                         # Calculate estimated total time based on current progress
                         if len(results) > 0:
                             avg_time_per_scenario = (time.time() - start_time) / len(results)
                             estimated_total_time = avg_time_per_scenario * len(scenarios)
                         else:
                             estimated_total_time = (time.time() - start_time) * 1.5
-                        
+
                         live_metrics = {
                             "completed": len(results),
                             "total": len(scenarios),
@@ -978,21 +974,21 @@ async def _execute_modal_with_streaming(
                             live_metrics
                         )
                         live.update(metrics_panel)
-                        
+
                         # Display execution timeline and performance metrics (every 3 batches)
                         if len(results) % 30 == 0 and len(results) > 0:
                             # Calculate performance metrics
                             elapsed = time.time() - start_time
                             scenarios_per_minute = (len(results) / elapsed) * 60 if elapsed > 0 else 0
                             avg_scenario_time = elapsed / len(results) if len(results) > 0 else 0
-                            
+
                             # Calculate speedup factor (estimate)
                             sequential_time = avg_scenario_time * len(results)
                             speedup_factor = sequential_time / elapsed if elapsed > 0 else 1
-                            
+
                             # Container efficiency (active/max ratio over time)
                             container_efficiency = (active_containers / max_containers * 100) if max_containers > 0 else 0
-                            
+
                             timeline_data = {
                                 "scenarios_per_minute": scenarios_per_minute,
                                 "avg_scenario_time": avg_scenario_time,
@@ -1000,12 +996,12 @@ async def _execute_modal_with_streaming(
                                 "container_efficiency": container_efficiency,
                                 "performance_trend": "improving" if speedup_factor > 1.5 else "stable"
                             }
-                            
+
                             timeline_panel = execution_loader.display_execution_timeline(timeline_data)
                             console.print()
                             console.print(timeline_panel)
                             console.print()
-                        
+
                         # Enhanced error monitoring with recovery procedures
                         if len(results) > 0:
                             failed_results = [r for r in results if not r.get("success", False)]
@@ -1015,9 +1011,9 @@ async def _execute_modal_with_streaming(
                                 for result in failed_results:
                                     error_category = result.get("error_category", "unknown")
                                     error_categories[error_category] = error_categories.get(error_category, 0) + 1
-                                
+
                                 error_rate = (len(failed_results) / len(results)) * 100
-                                
+
                                 error_data = {
                                     "errors": failed_results,
                                     "total_errors": len(failed_results),
@@ -1027,7 +1023,7 @@ async def _execute_modal_with_streaming(
                                     "clustering_active": len(failed_results) >= 3,
                                     "clusters_found": min(len(error_categories), 3)
                                 }
-                                
+
                                 error_panel = execution_loader.display_live_error_monitoring(error_data)
                                 if error_panel:
                                     console.print()
@@ -1136,7 +1132,7 @@ async def _execute_modal_with_streaming(
         # Handle Modal app context errors
         error_msg = str(e)
         console.print(format_error(f"Modal app initialization failed: {error_msg}"))
-        
+
         # Provide more detailed error information
         if "Token ID is malformed" in error_msg:
             console.print(format_warning("\nModal authentication issue detected."))
@@ -1148,7 +1144,7 @@ async def _execute_modal_with_streaming(
             console.print("  1. Clear existing tokens: unset MODAL_TOKEN_ID MODAL_TOKEN_SECRET")
             console.print("  2. Re-authenticate: modal token new")
             console.print("  3. Or use Arc demo tokens if provided")
-        
+
         # Return empty results with error
         execution_time = time.time() - start_time
         return [], execution_time, 0.0
@@ -1235,7 +1231,7 @@ async def _execute_simulation_with_streaming(
             "[warning]Modal not configured - simulating execution with intelligence analysis[/warning]"
         )
         console.print()
-        
+
         # Simulate with live updates using Rich Progress
         with Progress(
             SpinnerColumn(),
@@ -1246,15 +1242,15 @@ async def _execute_simulation_with_streaming(
             console=console,
         ) as progress:
             task = progress.add_task("Simulating scenarios...", total=len(scenarios))
-            
+
             for i, scenario in enumerate(scenarios):
                 # Simulate execution time
                 await asyncio.sleep(0.02)
-                
+
                 # Generate mock result with currency assumption focus
                 is_currency = "currency" in str(scenario).lower()
                 success = not (is_currency and i < 15)  # First 15 currency scenarios fail
-                
+
                 result = {
                     "scenario_id": scenario.get("scenario_id", f"scenario_{i}") if isinstance(scenario, dict) else getattr(scenario, "scenario_id", f"scenario_{i}"),
                     "success": success,

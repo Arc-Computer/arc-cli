@@ -1,28 +1,41 @@
 """Arc diff command - compare two agent configurations."""
 
 import asyncio
-from typing import Any, Dict, Optional, List
-from datetime import datetime
-from uuid import uuid4
 import time
+from datetime import datetime
+from typing import Any
+from uuid import uuid4
 
 import click
-from rich.table import Table
-from rich.panel import Panel
 import numpy as np
+from rich.panel import Panel
+from rich.table import Table
 from scipy.stats import chi2_contingency
 from sqlalchemy import text
+
 try:
     from statsmodels.stats.power import ttest_power
 except ImportError:
     ttest_power = None
 
-from arc.cli.utils import ArcConsole, CLIState, format_error, format_success, format_warning
-from arc.cli.utils import db_manager, HybridState
-from arc.cli.commands.run import _generate_scenarios_async, _check_modal_available, _simulate_execution, _estimate_cost
-from arc.ingestion.parser import AgentConfigParser
-from arc.ingestion.normalizer import ConfigNormalizer
+from arc.cli.commands.run import (
+    _check_modal_available,
+    _estimate_cost,
+    _generate_scenarios_async,
+    _simulate_execution,
+)
+from arc.cli.utils import (
+    ArcConsole,
+    CLIState,
+    HybridState,
+    db_manager,
+    format_error,
+    format_success,
+    format_warning,
+)
 from arc.core.models.config import AgentConfig
+from arc.ingestion.normalizer import ConfigNormalizer
+from arc.ingestion.parser import AgentConfigParser
 from arc.simulation.modal_orchestrator import ModalOrchestrator
 
 console = ArcConsole()
@@ -33,17 +46,17 @@ state = None
 async def _initialize_state():
     """Initialize state with database connection if available."""
     global state
-    
+
     # Check if database is available
     db_connected = db_manager.is_available
     if not db_connected:
         db_connected = await db_manager.initialize()
-    
+
     if db_connected:
         state = HybridState(db_connected=True)
     else:
         state = CLIState()
-    
+
     return db_connected
 
 
@@ -56,14 +69,14 @@ async def _initialize_state():
 @click.option('--json', 'json_output', is_flag=True, help='Output JSON instead of rich text')
 def diff(config1: str, config2: str, scenarios: int, historical: bool, modal: bool, json_output: bool):
     """Compare two agent configurations with A/B testing.
-    
+
     This command:
     1. Runs both configurations on the same scenarios
     2. Performs statistical significance testing
     3. Shows improvement metrics
     4. Validates claimed improvements
     5. Stores results in database for historical tracking
-    
+
     Example:
         arc diff finance_agent_v1.yaml finance_agent_v2.yaml
         arc diff config_a.yaml config_b.yaml --scenarios 100 --historical
@@ -77,35 +90,35 @@ def diff(config1: str, config2: str, scenarios: int, historical: bool, modal: bo
             print(json.dumps({"error": str(e)}, indent=2))
         else:
             console.print(format_error(f"Comparison failed: {str(e)}"))
-        raise click.exceptions.Exit(1)
+        raise click.exceptions.Exit(1) from e
 
 
 async def _diff_async(config1: str, config2: str, scenarios: int, historical: bool, modal: bool, json_output: bool):
     """Perform async diff with database integration."""
     # Initialize state
     db_connected = await _initialize_state()
-    
+
     if not json_output:
         console.print()
         console.print_header("A/B Configuration Comparison")
-    
+
     # Parse both configurations
     parser = AgentConfigParser()
     normalizer = ConfigNormalizer()
-    
+
     config1_parsed = parser.parse(config1)
     config1_normalized = normalizer.normalize(config1_parsed)
-    
+
     config2_parsed = parser.parse(config2)
     config2_normalized = normalizer.normalize(config2_parsed)
-    
+
     if not json_output:
         console.print_metric("Config A", config1)
         console.print_metric("Config B", config2)
         console.print_metric("Scenarios per config", scenarios)
-        console.print_metric("Execution mode", "Modal" if modal and _check_modal_available() else "Local simulation")
+        console.print_metric("Execution mode", "Modal" if modal and await _check_modal_available() else "Local simulation")
         console.print()
-    
+
     # Create AgentConfig objects
     config_a_obj = AgentConfig.from_dict(config1_normalized)
     config_b_obj = AgentConfig.from_dict(config2_normalized)
@@ -116,15 +129,15 @@ async def _diff_async(config1: str, config2: str, scenarios: int, historical: bo
         db_client = db_manager.get_client()
         if db_client:
             historical_comparisons = await _get_historical_comparisons(
-                db_client, 
-                config1.split("/")[-1], 
+                db_client,
+                config1.split("/")[-1],
                 config2.split("/")[-1]
             )
-    
+
     # Generate scenarios (same for both configs)
     if not json_output:
         console.print("Generating test scenarios...", style="muted")
-    
+
     test_scenarios = await _generate_scenarios_async(
         config_path=config1,
         count=scenarios,
@@ -132,46 +145,46 @@ async def _diff_async(config1: str, config2: str, scenarios: int, historical: bo
         capabilities=parser.extract_capabilities(config1_parsed),
         json_output=json_output
     )
-    
+
     # Create unique diff session ID
     diff_id = f"diff_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid4().hex[:8]}"
-    
+
     # Execute both configurations
-    use_modal = modal and _check_modal_available()
-    
+    use_modal = modal and await _check_modal_available()
+
     orchestrator = ModalOrchestrator(db_client=db_manager.get_client() if db_connected else None, console=console)
-    
+
     if not json_output:
         console.print()
         console.print("[primary]Running Config A[/primary]")
-    
+
     results_a, time_a, cost_a = await _execute_config(
         orchestrator, config_a_obj, test_scenarios, use_modal, json_output, f"{diff_id}_A"
     )
-    
+
     success_a = sum(1 for r in results_a if r.get("success"))
     reliability_a = success_a / len(results_a) if results_a else 0
-    
+
     if not json_output:
         console.print(format_success(f"Config A: {reliability_a:.1%} reliability"))
         console.print()
         console.print("[primary]Running Config B[/primary]")
-    
+
     results_b, time_b, cost_b = await _execute_config(
         orchestrator, config_b_obj, test_scenarios, use_modal, json_output, f"{diff_id}_B"
     )
 
     success_b = sum(1 for r in results_b if r.get("success"))
     reliability_b = success_b / len(results_b) if results_b else 0
-    
+
     if not json_output:
         console.print(format_success(f"Config B: {reliability_b:.1%} reliability"))
         console.print()
-    
+
     # Perform statistical analysis
     analysis = _perform_statistical_analysis(results_a, results_b)
-        
-    
+
+
     # Create diff result
     diff_result = {
         "diff_id": diff_id,
@@ -204,10 +217,10 @@ async def _diff_async(config1: str, config2: str, scenarios: int, historical: bo
         "scenario_count": scenarios,
         "execution_mode": "modal" if use_modal else "simulation"
     }
-    
+
     # Save diff result
     state.save_diff(diff_id, diff_result)
-    
+
     # Save to database if available
     if db_connected and isinstance(state, HybridState):
         db_client = db_manager.get_client()
@@ -216,7 +229,7 @@ async def _diff_async(config1: str, config2: str, scenarios: int, historical: bo
                 await _save_diff_to_database(db_client, diff_result, results_a, results_b)
             except Exception as e:
                 console.print(f"Warning: Failed to save diff to database: {str(e)}", style="warning")
-    
+
     # Display results
     if json_output:
         import json
@@ -226,23 +239,22 @@ async def _diff_async(config1: str, config2: str, scenarios: int, historical: bo
     else:
             # Results comparison table
             console.print_header("Results Comparison")
-            
+
             table = Table(show_header=True, header_style="bold")
             table.add_column("Metric", style="muted")
             table.add_column("Config A", justify="right")
             table.add_column("Config B", justify="right")
             table.add_column("Difference", justify="right")
-            
+
             # Reliability
             rel_diff = reliability_b - reliability_a
-            rel_style = "success" if rel_diff > 0 else "error" if rel_diff < 0 else "muted"
             table.add_row(
                 "Reliability",
                 f"{reliability_a:.1%}",
                 f"{reliability_b:.1%}",
                 f"{rel_diff:+.1%}"
             )
-            
+
             # Success/Failure counts
             table.add_row(
                 "Successes",
@@ -250,34 +262,32 @@ async def _diff_async(config1: str, config2: str, scenarios: int, historical: bo
                 str(success_b),
                 f"{success_b - success_a:+d}"
             )
-            
+
             table.add_row(
                 "Failures",
                 str(len(results_a) - success_a),
                 str(len(results_b) - success_b),
                 f"{(len(results_b) - success_b) - (len(results_a) - success_a):+d}"
             )
-            
+
             # Cost
             cost_diff = cost_b - cost_a
-            cost_style = "error" if cost_diff > 0 else "success" if cost_diff < 0 else "muted"
             table.add_row(
                 "Cost",
                 f"${cost_a:.4f}",
                 f"${cost_b:.4f}",
                 f"{cost_diff:+.4f}"
             )
-            
+
             # Time
             time_diff = time_b - time_a
-            time_style = "error" if time_diff > 0 else "success" if time_diff < 0 else "muted"
             table.add_row(
                 "Execution Time",
                 f"{time_a:.2f}s",
                 f"{time_b:.2f}s",
                 f"{time_diff:+.2f}s"
             )
-            
+
             console.print(table)
             console.print()
 
@@ -288,31 +298,30 @@ async def _diff_async(config1: str, config2: str, scenarios: int, historical: bo
             # Historical context panel
             if historical_comparisons:
                 _display_historical_comparisons(historical_comparisons)
-                
+
             console.print("Run [info]arc analyze[/info] with a diff ID for more details.", style="muted")
 
 
 async def _execute_config(
     orchestrator: ModalOrchestrator,
     config: AgentConfig,
-    scenarios: List[Dict[str, Any]],
+    scenarios: list[dict[str, Any]],
     use_modal: bool,
     json_output: bool,
     run_id: str
-) -> tuple[List[Dict], float, float]:
+) -> tuple[list[dict], float, float]:
     """Helper to execute a single configuration."""
     start_time = time.time()
-    
+
     if use_modal:
         all_results = []
         total_cost = 0.0
-        
+
         # This part needs to be adjusted to work with the orchestrator's async generator
         # For now, we'll collect results in a simplified way.
         # A more advanced implementation would process the async stream.
         async def run_and_collect():
             nonlocal all_results, total_cost
-            temp_results = []
             async for update in orchestrator.execute_with_persistence(config, scenarios, run_id):
                 # In a real CLI, you'd update a progress bar here
                 total_cost = update.current_cost
@@ -321,10 +330,10 @@ async def _execute_config(
             all_results = []
 
         await run_and_collect()
-        
+
         # After the run, we should ideally fetch the results from where they were persisted (DB or state file)
         # This part is simplified for now.
-        
+
         # Let's assume the state has been updated by the orchestrator (which it isn't in this draft)
         # So we'll return empty results and the final cost
         execution_time = time.time() - start_time
@@ -337,7 +346,7 @@ async def _execute_config(
         return results, exec_time, cost
 
 
-def _display_statistical_analysis(analysis: Dict[str, Any], reliability_a: float):
+def _display_statistical_analysis(analysis: dict[str, Any], reliability_a: float):
     """Display statistical analysis in a rich panel."""
     # Display statistical warnings
     statistical_warnings = analysis.get("statistical_warnings", [])
@@ -393,14 +402,14 @@ def _display_historical_comparisons(historical_comparisons: dict):
     """Display historical comparisons in a rich panel."""
     console.print_header("Historical Context")
     console.print(f"Found {len(historical_comparisons['previous_diffs'])} previous comparisons")
-    
+
     hist_table = Table(show_header=True, header_style="bold")
     hist_table.add_column("Date", style="muted")
     hist_table.add_column("Config A Reliability", justify="right")
-    hist_table.add_column("Config B Reliability", justify="right") 
+    hist_table.add_column("Config B Reliability", justify="right")
     hist_table.add_column("Improvement", justify="right")
     hist_table.add_column("Significant", justify="center")
-    
+
     for diff in historical_comparisons["previous_diffs"][:5]:
         hist_table.add_row(
             diff["date"],
@@ -409,7 +418,7 @@ def _display_historical_comparisons(historical_comparisons: dict):
             f"{diff['improvement']:+.1%}",
             "✓" if diff["significant"] else "✗"
         )
-    
+
     console.print(hist_table)
     console.print()
 
@@ -417,7 +426,7 @@ def _display_historical_comparisons(historical_comparisons: dict):
 async def _get_historical_comparisons(db_client, config1_name: str, config2_name: str) -> dict:
     """Get historical A/B test comparisons from database."""
     query = text("""
-    SELECT 
+    SELECT
         cd.created_at,
         cd.config_a_reliability,
         cd.config_b_reliability,
@@ -432,10 +441,10 @@ async def _get_historical_comparisons(db_client, config1_name: str, config2_name
     ORDER BY cd.created_at DESC
     LIMIT 10
     """)
-    
+
     async with db_client.engine.begin() as conn:
         result = await conn.execute(query, {"config1": config1_name, "config2": config2_name})
-    
+
     previous_diffs = []
     for row in result:
         previous_diffs.append({
@@ -448,7 +457,7 @@ async def _get_historical_comparisons(db_client, config1_name: str, config2_name
             "effect_size": float(row[6] or 0),
             "scenarios": row[7]
         })
-    
+
     return {
         "previous_diffs": previous_diffs,
         "comparison_count": len(previous_diffs)
@@ -459,46 +468,46 @@ async def _save_diff_to_database(db_client, diff_result: dict, results_a: list, 
     """Save A/B test comparison to database."""
     # This would save to config_diffs table
     # For now, we'll create the necessary data structure
-    config_a_name = diff_result["config_a"]["path"].split("/")[-1]
-    config_b_name = diff_result["config_b"]["path"].split("/")[-1]
-    
+    # config_a_name = diff_result["config_a"]["path"].split("/")[-1]
+    # config_b_name = diff_result["config_b"]["path"].split("/")[-1]
+
     # Would execute INSERT to config_diffs table here
     pass
 
 
-def _perform_statistical_analysis(results_a: list, results_b: list) -> Dict[str, Any]:
+def _perform_statistical_analysis(results_a: list, results_b: list) -> dict[str, Any]:
     """Perform statistical analysis on A/B test results with proper validation."""
     # Validate sample sizes
     n_a = len(results_a)
     n_b = len(results_b)
-    
+
     min_sample_size = 30  # Minimum for reliable statistics
     sample_size_warning = None
-    
+
     if n_a < min_sample_size or n_b < min_sample_size:
         sample_size_warning = f"Small sample size detected (A: {n_a}, B: {n_b}). Results may not be reliable. Consider running with at least {min_sample_size} scenarios."
-    
+
     # Convert to binary success arrays
     successes_a = [1 if r["success"] else 0 for r in results_a]
     successes_b = [1 if r["success"] else 0 for r in results_b]
-    
+
     # Calculate proportions
     p_a = sum(successes_a) / n_a if n_a > 0 else 0
     p_b = sum(successes_b) / n_b if n_b > 0 else 0
-    
+
     # Use chi-square test for proportions (more appropriate than t-test for binary data)
     from scipy.stats import fisher_exact
-    
+
     contingency_table = [
         [sum(successes_a), n_a - sum(successes_a)],
         [sum(successes_b), n_b - sum(successes_b)]
     ]
-    
+
     # Validate chi-square test assumptions
     # Expected frequencies should be at least 5 in each cell
     try:
         chi2, p_value_chi2, dof, expected = chi2_contingency(contingency_table)
-        
+
         # Check if all expected frequencies are >= 5
         min_expected = np.min(expected)
         if min_expected < 5:
@@ -506,26 +515,23 @@ def _perform_statistical_analysis(results_a: list, results_b: list) -> Dict[str,
             if len(contingency_table) == 2 and len(contingency_table[0]) == 2:
                 oddsratio, p_value = fisher_exact(contingency_table)
                 test_type = "fisher_exact"
-                chi2 = None  # Not applicable for Fisher's exact
             else:
                 # For very small samples, just report descriptive statistics
                 p_value = None
                 test_type = "descriptive_only"
-                chi2 = None
         else:
             p_value = p_value_chi2
             test_type = "chi_square"
-            
+
     except (ValueError, ZeroDivisionError):
         # Handle edge cases where chi-square test cannot be performed
         p_value = None
         test_type = "insufficient_data"
-        chi2 = None
-    
+
     # Calculate effect size (Cohen's h for proportions)
     # h = 2 * (arcsin(sqrt(p1)) - arcsin(sqrt(p2)))
     h = 2 * (np.arcsin(np.sqrt(p_b)) - np.arcsin(np.sqrt(p_a)))
-    
+
     # Calculate confidence interval for difference in proportions
     pooled_p = (sum(successes_a) + sum(successes_b)) / (n_a + n_b)
     se = np.sqrt(pooled_p * (1 - pooled_p) * (1/n_a + 1/n_b))
@@ -533,31 +539,31 @@ def _perform_statistical_analysis(results_a: list, results_b: list) -> Dict[str,
     z_critical = 1.96  # 95% confidence
     ci_lower = diff - z_critical * se
     ci_upper = diff + z_critical * se
-    
+
     # Calculate statistical power
     if ttest_power is not None:
         try:
             power = ttest_power(abs(h), n_a, alpha=0.05, alternative='two-sided')
-        except:
+        except Exception:
             power = None
     else:
         power = None
-    
+
     # Determine significance based on available test
     significant = p_value < 0.05 if p_value is not None else None
-    
+
     # Add additional warnings for statistical validity
     statistical_warnings = []
     if sample_size_warning:
         statistical_warnings.append(sample_size_warning)
-    
+
     if test_type == "fisher_exact":
         statistical_warnings.append("Used Fisher's exact test due to small expected frequencies.")
     elif test_type == "descriptive_only":
         statistical_warnings.append("Statistical test not performed due to insufficient data. Results are descriptive only.")
     elif test_type == "insufficient_data":
         statistical_warnings.append("Insufficient data for statistical analysis. Increase sample size.")
-    
+
     return {
         "p_value": p_value,
         "significant": significant,
@@ -588,3 +594,4 @@ def _interpret_effect_size(h: float) -> str:
         return "medium"
     else:
         return "large"
+

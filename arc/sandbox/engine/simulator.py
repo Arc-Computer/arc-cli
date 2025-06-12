@@ -291,11 +291,40 @@ def evaluate_single_scenario(
                 "scenario_execution_error", str(e), recovery_attempted=False
             )
 
-        # Calculate reliability score
+        # Calculate reliability score with enhanced judges
         with trajectory_capture.tracer.start_as_current_span(
             "reliability_scoring", attributes={"span.kind": "SCORING"}
         ) as score_span:
-            reliability_score = calculate_reliability_score(trajectory, scenario)
+            # Try enhanced scoring first, fallback to basic if needed
+            try:
+                from arc.sandbox.evaluation.reliability_scorer import ReliabilityScorer
+                scorer = ReliabilityScorer(use_enhanced_judges=True)
+                
+                # Use async scoring if possible
+                import asyncio
+                try:
+                    loop = asyncio.get_event_loop()
+                    if loop.is_running():
+                        # If we're already in an async context, create a new task
+                        reliability_score_obj = asyncio.create_task(
+                            scorer.score_trajectory_async(trajectory, scenario)
+                        )
+                        # Wait for the task to complete
+                        reliability_score_obj = loop.run_until_complete(reliability_score_obj)
+                    else:
+                        reliability_score_obj = loop.run_until_complete(
+                            scorer.score_trajectory_async(trajectory, scenario)
+                        )
+                except:
+                    # Fallback to sync scoring
+                    reliability_score_obj = scorer.score_trajectory(trajectory, scenario)
+                
+                reliability_score = reliability_score_obj.to_dict()
+                
+            except Exception as e:
+                print(f"[CONTAINER-{scenario_index}] Enhanced scoring failed: {e}")
+                # Fallback to original scoring
+                reliability_score = calculate_reliability_score(trajectory, scenario)
             score_span.set_attribute(
                 "reliability.overall_score", reliability_score.get("overall_score", 0)
             )

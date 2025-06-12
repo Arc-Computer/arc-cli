@@ -326,6 +326,19 @@ def _display_analysis_ui(run_result, analysis, historical_patterns, cross_run_in
     console.print()
     console.print_header(f"Failure Analysis for {run_result.config_path}")
     
+    # Enhanced reliability scoring display if available
+    if hasattr(run_result, 'results') and run_result.results:
+        from arc.cli.visualizations.reliability_display import create_reliability_dashboard_from_results
+        
+        console.print("[bold bright_cyan]📊 5-Dimensional Reliability Analysis[/bold bright_cyan]")
+        console.print()
+        
+        create_reliability_dashboard_from_results(
+            results=run_result.results,
+            scenario_count=run_result.scenario_count,
+            console=console
+        )
+    
     console.print_metric("Run ID", run_result.run_id, style="muted")
     console.print_metric("Total failures", f"{analysis['total_failures']} / {run_result.scenario_count}")
     console.print_metric("Failure rate", f"{analysis['failure_rate']:.1%}")

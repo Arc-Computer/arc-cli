@@ -283,15 +283,19 @@ async def _run_impl(
             )
             console.print()
 
-            # Results table
-            table = Table(show_header=False, box=None)
+            # Enhanced 5-dimensional reliability scoring display
+            from arc.cli.visualizations.reliability_display import create_reliability_dashboard_from_results
+            
+            create_reliability_dashboard_from_results(
+                results=results,
+                scenario_count=len(results),
+                console=console
+            )
+            
+            # Additional metrics table
+            table = Table(show_header=False, box=None, title="Additional Metrics")
             table.add_column("Metric", style="muted")
             table.add_column("Value", style="bright_cyan")
-
-            table.add_row(
-                "Overall Reliability",
-                f"{reliability_score:.1%} ({success_count}/{len(results)} scenarios)",
-            )
 
             # Show assumption violations discovered
             if assumption_violations:

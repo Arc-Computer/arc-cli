@@ -33,6 +33,7 @@ from arc.core.models.config import AgentConfig
 from arc.database.client import ArcDBClient
 from arc.database.api import ArcAPI
 from arc.database.batch_processor import BatchExecutionRecorder, BatchConfig, batch_processor_context
+from arc.database.utils import normalize_modal_result
 from arc.cli.utils import ArcConsole
 from arc.sandbox.engine.simulator import app as modal_app, evaluate_single_scenario
 
@@ -273,11 +274,11 @@ class ModalOrchestrator:
                         batch_metrics=batch_processor.get_status()
                     )
                     
-                    # Execute scenarios using deployed app
+                    # Execute scenarios using deployed app with parallel batches
                     async for result in ArcModalAPI.run_scenarios(
                         scenarios=scenario_dicts,
                         agent_config=agent_config.model_dump(),
-                        batch_size=10
+                        batch_size=20  # Process 20 scenarios in parallel per batch
                     ):
                         completed_count += 1
                         
@@ -296,9 +297,11 @@ class ModalOrchestrator:
                         
                         # Add to batch processor instead of immediate database write
                         try:
+                            # Transform the result to ensure 0-1 scale reliability scores for database
+                            transformed_result = normalize_modal_result(result)
                             await batch_processor.add_outcome(
                                 simulation_id=simulation_id,
-                                scenario_result=result,
+                                scenario_result=transformed_result,
                                 modal_call_id=f"deployed_modal_{completed_count}",
                                 sandbox_id=f"deployed_sandbox_{completed_count}"
                             )
@@ -375,9 +378,11 @@ class ModalOrchestrator:
                             
                             # Add to batch processor instead of immediate database write
                             try:
+                                # Transform the result to ensure 0-1 scale reliability scores for database
+                                transformed_result = normalize_modal_result(result)
                                 await batch_processor.add_outcome(
                                     simulation_id=simulation_id,
-                                    scenario_result=result,
+                                    scenario_result=transformed_result,
                                     modal_call_id=f"modal_call_{i}",
                                     sandbox_id=f"sandbox_{i}"
                                 )
@@ -518,3 +523,5 @@ class ModalOrchestrator:
         cost_per_scenario = (1.0 * pricing["cost_per_1k_in"]) + (0.5 * pricing["cost_per_1k_out"])
         
         return scenario_count * cost_per_scenario
+
+

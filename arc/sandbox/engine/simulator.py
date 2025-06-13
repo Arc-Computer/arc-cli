@@ -47,6 +47,7 @@ arc_image = (
         "tiktoken",
         "numpy",
         "scikit-learn",
+        "fastapi[standard]",  # Required for web endpoints
     )
     # Modal 1.0: Use add_local_dir for production arc directory
     .add_local_dir(os.path.join(project_root, "arc"), "/root/arc")

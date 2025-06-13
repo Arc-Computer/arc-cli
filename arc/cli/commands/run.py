@@ -44,6 +44,7 @@ from arc.ingestion.normalizer import ConfigNormalizer
 from arc.ingestion.parser import AgentConfigParser
 from arc.scenarios.generator import ScenarioGenerator
 from arc.simulation.modal_orchestrator import ModalOrchestrator
+from arc.database.utils import normalize_reliability_score
 
 console = ArcConsole()
 # Will be initialized with database connection if available
@@ -321,8 +322,16 @@ async def _run_impl(
             calc_task = progress.add_task("Calculating reliability metrics...", total=None)
             success_count = sum(1 for r in results if r.get("success"))
             failure_count = len(results) - success_count
-            reliability_score = success_count / len(results) if results else 0
-            progress.update(calc_task, description=f"✓ Reliability: {reliability_score:.1%} ({success_count}/{len(results)})")
+            
+            # Calculate average reliability score with consistent 0-1 scale normalization
+            normalized_scores = []
+            for r in results:
+                raw_score = r.get("reliability_score", 0)
+                normalized_score = normalize_reliability_score(raw_score)
+                normalized_scores.append(normalized_score)
+            
+            avg_reliability = sum(normalized_scores) / len(normalized_scores) if normalized_scores else 0
+            progress.update(calc_task, description=f"✓ Reliability: {avg_reliability:.1%} ({success_count}/{len(results)})")
             progress.remove_task(calc_task)  # Remove task to prevent duplicate display
 
             # Analyze assumption violations
@@ -360,7 +369,7 @@ async def _run_impl(
                 scenario_count=len(generated_scenarios),
                 success_count=success_count,
                 failure_count=failure_count,
-                reliability_score=reliability_score,
+                reliability_score=avg_reliability,
                 execution_time=execution_time,
                 total_cost=actual_cost,
                 scenarios=[
@@ -389,7 +398,7 @@ async def _run_impl(
         else:
             console.print()
             console.print("[bold green]📊 Execution Results[/bold green]")
-            console.print(f"  └── [cyan]Reliability Score:[/cyan] {reliability_score:.1%} ({success_count}/{len(results)} scenarios)")
+            console.print(f"  └── [cyan]Reliability Score:[/cyan] {avg_reliability:.1%}")
             
             if execution_time > 0:
                 console.print(f"  ├── [yellow]Execution Time:[/yellow] {execution_time:.2f}s")
@@ -895,8 +904,13 @@ async def _execute_with_orchestrator(
 
 def _transform_modal_result(modal_result: dict[str, Any]) -> dict[str, Any]:
     """Transform raw Modal result to include success field for reliability calculation."""
+    print(f"🔍 DEBUG: _transform_modal_result input:")
+    print(f"   Raw modal_result keys: {list(modal_result.keys()) if modal_result else 'None'}")
+    print(f"   Modal result type: {type(modal_result)}")
+    
     if isinstance(modal_result, dict) and "error" in modal_result:
         # This is an error result
+        print(f"🔍 DEBUG: Found error in modal result: {modal_result.get('error')}")
         return {
             "success": False,
             "failure_reason": modal_result.get("error", "Unknown error"),
@@ -910,24 +924,27 @@ def _transform_modal_result(modal_result: dict[str, Any]) -> dict[str, Any]:
     reliability_score = modal_result.get("reliability_score", {})
     trajectory = modal_result.get("trajectory", {})
     
+    print(f"🔍 DEBUG: Extracted data:")
+    print(f"   reliability_score: {reliability_score} (type: {type(reliability_score)})")
+    print(f"   trajectory status: {trajectory.get('status', 'MISSING') if trajectory else 'NO_TRAJECTORY'}")
+    
     # Determine success based on reliability score or trajectory status
     overall_score = 0.0  # Initialize default
     
     if isinstance(reliability_score, dict):
         overall_score = reliability_score.get("overall_score", 0.0)
         success = overall_score >= 70.0  # Consider 70%+ as success (scores are 0-100)
-        # Return the overall score, not the entire dict
-        final_reliability_score = overall_score
     elif isinstance(reliability_score, (int, float)):
         overall_score = float(reliability_score)
         success = overall_score >= 70.0  # Consider 70%+ as success (scores are 0-100)
-        final_reliability_score = overall_score
     else:
         # Fallback to trajectory status
         trajectory_status = trajectory.get("status", "unknown")
         success = trajectory_status == "success"
         overall_score = 100.0 if success else 0.0
-        final_reliability_score = overall_score
+    
+    # Use centralized normalization for database storage
+    final_reliability_score = normalize_reliability_score(reliability_score)
     
     # Calculate execution time and cost
     execution_time = trajectory.get("execution_time_seconds", 0)
@@ -942,6 +959,11 @@ def _transform_modal_result(modal_result: dict[str, Any]) -> dict[str, Any]:
         "cost": cost,
         "reliability_score": final_reliability_score,
     })
+    
+    print(f"🔍 DEBUG: Final transformed result:")
+    print(f"   success: {success}")
+    print(f"   final_reliability_score: {final_reliability_score} (0-1 scale for database)")
+    print(f"   overall_score used: {overall_score} (0-100 scale from Modal)")
     
     return result
 

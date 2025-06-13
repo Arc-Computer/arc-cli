@@ -152,12 +152,40 @@ class ArcModalAPI:
                 
                 # Wait for all tasks in batch to complete and yield results
                 results = await asyncio.gather(*tasks, return_exceptions=True)
-                for result in results:
+                for j, result in enumerate(results):
                     if isinstance(result, Exception):
-                        # Handle exceptions from tasks
+                        # Handle exceptions from tasks - create synthetic error result
+                        scenario_index = i + j
+                        scenario = batch[j] if j < len(batch) else {}
+                        
                         print(f"🔍 DEBUG: Task failed with exception: {result}")
-                        continue
-                    yield result
+                        logger.error(f"Task for scenario {scenario_index} failed: {result}")
+                        
+                        # Yield synthetic error result matching success result shape
+                        synthetic_result = {
+                            "scenario": scenario,
+                            "trajectory": {
+                                "start_time": datetime.now().isoformat(),
+                                "status": "error",
+                                "task_prompt": scenario.get("task_prompt", ""),
+                                "final_response": f"Task execution error: {str(result)}",
+                                "trajectory_event_count": 0,
+                                "execution_time_seconds": 0,
+                                "full_trajectory": [],
+                                "error": str(result),
+                                "token_usage": {
+                                    "prompt_tokens": 0,
+                                    "completion_tokens": 0,
+                                    "total_tokens": 0,
+                                    "total_cost": 0,
+                                },
+                            },
+                            "reliability_score": {"overall_score": 0},
+                            "scenario_index": scenario_index,
+                        }
+                        yield synthetic_result
+                    else:
+                        yield result
 
     @staticmethod
     def is_available() -> bool:

@@ -387,9 +387,12 @@ async def _run_impl(
 
             print(json.dumps(final_run_result.to_dict(), indent=2))
         else:
+            # Calculate average reliability score - this is the real performance metric
+            avg_reliability = sum(r.get("reliability_score", 0) for r in results) / len(results) if results else 0
+            
             console.print()
             console.print("[bold green]📊 Execution Results[/bold green]")
-            console.print(f"  └── [cyan]Reliability Score:[/cyan] {reliability_score:.1%} ({success_count}/{len(results)} scenarios)")
+            console.print(f"  └── [cyan]Reliability Score:[/cyan] {avg_reliability:.1%}")
             
             if execution_time > 0:
                 console.print(f"  ├── [yellow]Execution Time:[/yellow] {execution_time:.2f}s")
@@ -895,8 +898,13 @@ async def _execute_with_orchestrator(
 
 def _transform_modal_result(modal_result: dict[str, Any]) -> dict[str, Any]:
     """Transform raw Modal result to include success field for reliability calculation."""
+    print(f"🔍 DEBUG: _transform_modal_result input:")
+    print(f"   Raw modal_result keys: {list(modal_result.keys()) if modal_result else 'None'}")
+    print(f"   Modal result type: {type(modal_result)}")
+    
     if isinstance(modal_result, dict) and "error" in modal_result:
         # This is an error result
+        print(f"🔍 DEBUG: Found error in modal result: {modal_result.get('error')}")
         return {
             "success": False,
             "failure_reason": modal_result.get("error", "Unknown error"),
@@ -910,24 +918,30 @@ def _transform_modal_result(modal_result: dict[str, Any]) -> dict[str, Any]:
     reliability_score = modal_result.get("reliability_score", {})
     trajectory = modal_result.get("trajectory", {})
     
+    print(f"🔍 DEBUG: Extracted data:")
+    print(f"   reliability_score: {reliability_score} (type: {type(reliability_score)})")
+    print(f"   trajectory status: {trajectory.get('status', 'MISSING') if trajectory else 'NO_TRAJECTORY'}")
+    
     # Determine success based on reliability score or trajectory status
     overall_score = 0.0  # Initialize default
     
     if isinstance(reliability_score, dict):
         overall_score = reliability_score.get("overall_score", 0.0)
         success = overall_score >= 70.0  # Consider 70%+ as success (scores are 0-100)
-        # Return the overall score, not the entire dict
-        final_reliability_score = overall_score
+        # Convert from 0-100 scale to 0-1 scale for database
+        final_reliability_score = overall_score / 100.0
     elif isinstance(reliability_score, (int, float)):
         overall_score = float(reliability_score)
         success = overall_score >= 70.0  # Consider 70%+ as success (scores are 0-100)
-        final_reliability_score = overall_score
+        # Convert from 0-100 scale to 0-1 scale for database
+        final_reliability_score = overall_score / 100.0
     else:
         # Fallback to trajectory status
         trajectory_status = trajectory.get("status", "unknown")
         success = trajectory_status == "success"
         overall_score = 100.0 if success else 0.0
-        final_reliability_score = overall_score
+        # Convert from 0-100 scale to 0-1 scale for database
+        final_reliability_score = overall_score / 100.0
     
     # Calculate execution time and cost
     execution_time = trajectory.get("execution_time_seconds", 0)
@@ -942,6 +956,11 @@ def _transform_modal_result(modal_result: dict[str, Any]) -> dict[str, Any]:
         "cost": cost,
         "reliability_score": final_reliability_score,
     })
+    
+    print(f"🔍 DEBUG: Final transformed result:")
+    print(f"   success: {success}")
+    print(f"   final_reliability_score: {final_reliability_score} (0-1 scale for database)")
+    print(f"   overall_score used: {overall_score} (0-100 scale from Modal)")
     
     return result
 

@@ -8,11 +8,16 @@ import os
 import asyncio
 import aiohttp
 import json
+import logging
 from datetime import datetime
 from collections.abc import AsyncIterator
 from typing import Any
 
 from arc.cli.utils.json_utils import json_serializer
+
+# Set up debug logging for Modal responses
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.DEBUG)
 
 
 class ArcModalAPI:
@@ -43,6 +48,9 @@ class ArcModalAPI:
             # Default URL pattern for Modal web endpoints
             workspace = os.environ.get("ARC_MODAL_WORKSPACE", "your-workspace")
             base_url = f"https://{workspace}--arc-production-evaluate-scenario-endpoint.modal.run"
+        
+        print(f"🔍 DEBUG: Using Modal endpoint: {base_url}")
+        logger.info(f"Using Modal endpoint: {base_url}")
 
         # Execute scenarios in batches
         async with aiohttp.ClientSession() as session:
@@ -63,14 +71,28 @@ class ArcModalAPI:
                         # Serialize the request data with custom serializer
                         json_data = json.dumps(request_data, default=json_serializer)
                         
+                        print(f"🔍 DEBUG: Sending request to Modal for scenario {scenario_index}: {scenario.get('name', 'Unknown')}")
+                        logger.info(f"Sending request to Modal for scenario {scenario_index}")
+                        
                         async with session.post(
                             base_url,
                             data=json_data,
                             headers={"Content-Type": "application/json"},
                             timeout=aiohttp.ClientTimeout(total=300)  # 5 minute timeout
                         ) as response:
+                            print(f"🔍 DEBUG: Modal response status: {response.status}")
+                            logger.info(f"Modal response status: {response.status}")
+                            
                             if response.status == 200:
                                 result = await response.json()
+                                
+                                # Debug log the raw response
+                                print(f"🔍 DEBUG: Raw Modal response for scenario {scenario_index}:")
+                                print(f"   Reliability score: {result.get('reliability_score', 'MISSING')}")
+                                print(f"   Trajectory status: {result.get('trajectory', {}).get('status', 'MISSING')}")
+                                print(f"   Response keys: {list(result.keys())}")
+                                logger.debug(f"Modal response for scenario {scenario_index}: {json.dumps(result, indent=2, default=str)}")
+                                
                                 yield result
                             else:
                                 error_text = await response.text()

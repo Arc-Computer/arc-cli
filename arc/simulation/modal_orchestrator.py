@@ -296,9 +296,11 @@ class ModalOrchestrator:
                         
                         # Add to batch processor instead of immediate database write
                         try:
+                            # Transform the result to ensure 0-1 scale reliability scores for database
+                            transformed_result = self._normalize_reliability_score(result)
                             await batch_processor.add_outcome(
                                 simulation_id=simulation_id,
-                                scenario_result=result,
+                                scenario_result=transformed_result,
                                 modal_call_id=f"deployed_modal_{completed_count}",
                                 sandbox_id=f"deployed_sandbox_{completed_count}"
                             )
@@ -375,9 +377,11 @@ class ModalOrchestrator:
                             
                             # Add to batch processor instead of immediate database write
                             try:
+                                # Transform the result to ensure 0-1 scale reliability scores for database
+                                transformed_result = self._normalize_reliability_score(result)
                                 await batch_processor.add_outcome(
                                     simulation_id=simulation_id,
-                                    scenario_result=result,
+                                    scenario_result=transformed_result,
                                     modal_call_id=f"modal_call_{i}",
                                     sandbox_id=f"sandbox_{i}"
                                 )
@@ -518,3 +522,26 @@ class ModalOrchestrator:
         cost_per_scenario = (1.0 * pricing["cost_per_1k_in"]) + (0.5 * pricing["cost_per_1k_out"])
         
         return scenario_count * cost_per_scenario
+
+    def _normalize_reliability_score(self, result: dict) -> dict:
+        """Normalize reliability scores from 0-100 scale to 0-1 scale for database storage."""
+        if not isinstance(result, dict):
+            return result
+        
+        # Create a copy to avoid modifying the original result
+        normalized_result = result.copy()
+        
+        reliability_score = normalized_result.get("reliability_score", {})
+        
+        if isinstance(reliability_score, dict):
+            # Convert overall_score from 0-100 to 0-1
+            if "overall_score" in reliability_score:
+                overall_score = reliability_score["overall_score"]
+                if isinstance(overall_score, (int, float)) and overall_score > 1.0:
+                    normalized_result["reliability_score"] = reliability_score.copy()
+                    normalized_result["reliability_score"]["overall_score"] = overall_score / 100.0
+        elif isinstance(reliability_score, (int, float)) and reliability_score > 1.0:
+            # Convert simple numeric score from 0-100 to 0-1
+            normalized_result["reliability_score"] = reliability_score / 100.0
+        
+        return normalized_result

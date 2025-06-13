@@ -323,6 +323,7 @@ async def _run_impl(
             failure_count = len(results) - success_count
             reliability_score = success_count / len(results) if results else 0
             progress.update(calc_task, description=f"✓ Reliability: {reliability_score:.1%} ({success_count}/{len(results)})")
+            progress.remove_task(calc_task)  # Remove task to prevent duplicate display
 
             # Analyze assumption violations
             analysis_task = progress.add_task("Analyzing assumption violations...", total=None)
@@ -348,6 +349,7 @@ async def _run_impl(
             violation_count = len(assumption_violations)
             currency_count = len(currency_failures)
             progress.update(analysis_task, description=f"✓ Found {violation_count} violations, {currency_count} currency issues")
+            progress.remove_task(analysis_task)  # Remove task to prevent duplicate display
 
             # Save results 
             save_task = progress.add_task("Saving results...", total=None)
@@ -374,6 +376,7 @@ async def _run_impl(
                 progress.update(save_task, description="✓ Results saved to database")
             else:
                 progress.update(save_task, description="✓ Results saved to local file")
+            progress.remove_task(save_task)  # Remove task to prevent duplicate display
         
         if not json_output:
             console.print()
@@ -784,101 +787,163 @@ async def _execute_with_orchestrator(
     run_id: str,
     json_output: bool,
 ) -> tuple[list[dict[str, Any]], float, float]:
-    """Execute scenarios using the Modal orchestrator with real-time progress."""
+    """Execute scenarios using the Modal orchestrator with batch processing support."""
+    results = []
+    total_cost = 0.0
     start_time = time.time()
-    
-    try:
-        # Initialize intelligence components
-        assumption_detector = AssumptionDetector()
-        
-        # Use the orchestrator with clean Rich progress display
-        results = []
-        total_cost = 0.0
-        
-        if not json_output:
-            if os.environ.get("ARC_USE_DEPLOYED_APP"):
-                console.print("Executing on deployed Modal app...", style="info")
+
+    if not json_output:
+        # Rich progress display with batch processing metrics
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            BarColumn(),
+            TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
+            TimeRemainingColumn(),
+            TextColumn("[dim]({task.fields[status]})[/dim]"),
+            console=console,
+        ) as progress:
+            task = progress.add_task(
+                "Executing scenarios...", 
+                total=len(scenarios),
+                status="Initializing..."
+            )
             
-            # Create Rich Progress for clean tree-structured display
-            with Progress(
-                SpinnerColumn(),
-                TextColumn("[progress.description]{task.description}"),
-                BarColumn(),
-                TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
-                TextColumn("•"),
-                TextColumn("[blue]{task.fields[containers]}[/blue] containers"),
-                TextColumn("•"),
-                TextColumn("[yellow]${task.fields[cost]:.4f}[/yellow]"),
-                console=console,
-            ) as progress:
-                
-                # Add main execution task
-                execution_task = progress.add_task(
-                    "Executing scenarios on Modal...", 
-                    total=len(scenarios),
-                    containers=0,
-                    cost=0.0
+            batch_task = progress.add_task(
+                "Batch processing...",
+                total=100,  # Use percentage-based progress
+                status="Ready"
+            )
+
+            async for update in orchestrator.execute_with_persistence(
+                agent_config, scenarios, run_id
+            ):
+                # Update main progress
+                progress.update(
+                    task,
+                    completed=update.completed,
+                    status=update.status_message
                 )
                 
-                async for progress_update in orchestrator.execute_with_persistence(
-                    agent_config=agent_config,
-                    scenarios=scenarios,
-                    run_id=run_id
-                ):
-                    # Update Rich Progress with clean display
-                    progress.update(
-                        execution_task,
-                        completed=progress_update.completed,
-                        description=f"Executing scenarios on Modal... ({progress_update.status_message})",
-                        containers=progress_update.active_containers,
-                        cost=progress_update.current_cost
+                # Update batch processing metrics if available
+                if update.batch_metrics:
+                    metrics = update.batch_metrics.get("metrics", {})
+                    pending = (
+                        update.batch_metrics.get("pending_outcomes", 0) +
+                        update.batch_metrics.get("pending_tool_usage", 0) +
+                        update.batch_metrics.get("pending_failures", 0)
                     )
                     
-                    # Process results as they come in
-                    if progress_update.latest_result:
-                        # Add intelligence analysis
-                        result = await _process_modal_result_with_intelligence(
-                            modal_result=progress_update.latest_result,
-                            assumption_detector=assumption_detector,
-                            agent_profile=agent_profile
-                        )
-                        results.append(result)
-                        total_cost = progress_update.current_cost
-            
-            console.print(f"[bold green]✅ Execution completed![/bold green] Final cost: ${total_cost:.4f}")
-            console.print()
-        else:
-            # JSON mode: execute without visual feedback
-            async for progress_update in orchestrator.execute_with_persistence(
-                agent_config=agent_config,
-                scenarios=scenarios,
-                run_id=run_id
-            ):
-                if progress_update.latest_result:
-                    result = await _process_modal_result_with_intelligence(
-                        modal_result=progress_update.latest_result,
-                        assumption_detector=assumption_detector,
-                        agent_profile=agent_profile
+                    processed = metrics.get('successful_records', 0)
+                    total_records = processed + pending
+                    completion_pct = (processed / total_records * 100) if total_records > 0 else 100
+                    
+                    batch_status = f"Pending: {pending} | "
+                    batch_status += f"Processed: {processed} | "
+                    batch_status += f"Rate: {metrics.get('records_per_second', 0):.1f} rec/s"
+                    
+                    if update.batch_metrics.get("circuit_breaker_state") == "OPEN":
+                        batch_status += " | ⚠️ Circuit Breaker OPEN"
+                    
+                    progress.update(
+                        batch_task,
+                        completed=completion_pct,
+                        status=batch_status
                     )
-                    results.append(result)
-                    total_cost = progress_update.current_cost
-        
-        execution_time = time.time() - start_time
-        return results, execution_time, total_cost
-        
-    except Exception as e:
-        if not json_output:
-            console.print(f"[bold red]❌ Orchestrator failed:[/bold red] {str(e)}")
-            console.print("[bold yellow]⚡ Falling back to direct execution...[/bold yellow]")
-            console.print()
-        
-        # Fall back to the streaming analysis
-        return await _execute_with_streaming_analysis(
-            scenarios=scenarios,
-            agent_config=agent_config.model_dump(),
-            agent_profile=agent_profile,
-            json_output=json_output
-        )
+
+                # Store latest result
+                if update.latest_result:
+                    # Transform raw Modal result to include success field
+                    transformed_result = _transform_modal_result(update.latest_result)
+                    results.append(transformed_result)
+                
+                total_cost = update.current_cost
+
+    else:
+        # JSON mode: collect all results without visual feedback
+        async for update in orchestrator.execute_with_persistence(
+            agent_config, scenarios, run_id
+        ):
+            if update.latest_result:
+                # Transform raw Modal result to include success field
+                transformed_result = _transform_modal_result(update.latest_result)
+                results.append(transformed_result)
+            total_cost = update.current_cost
+
+    execution_time = time.time() - start_time
+    
+    # Calculate final metrics
+    success_count = sum(1 for r in results if r.get("success", False))
+    
+    # Create fallback results if batch processing succeeded but results array is empty
+    if not results and batch_outcomes:
+        # This can happen when Modal execution succeeds but results aren't yielded properly
+        console.print("[yellow]Creating fallback results from batch processing data[/yellow]")
+        for i, outcome in enumerate(batch_outcomes[:scenario_count]):
+            fallback_result = {
+                "success": outcome.get("reliability_score", 0) >= 70.0,
+                "reliability_score": outcome.get("reliability_score", 0),
+                "scenario_id": f"scenario_{i}",
+                "execution_time": outcome.get("execution_time", 0),
+                "cost": outcome.get("cost", 0),
+            }
+            results.append(fallback_result)
+        success_count = sum(1 for r in results if r.get("success", False))
+
+    return results, execution_time, total_cost
+
+
+def _transform_modal_result(modal_result: dict[str, Any]) -> dict[str, Any]:
+    """Transform raw Modal result to include success field for reliability calculation."""
+    if isinstance(modal_result, dict) and "error" in modal_result:
+        # This is an error result
+        return {
+            "success": False,
+            "failure_reason": modal_result.get("error", "Unknown error"),
+            "execution_time": 0,
+            "cost": 0,
+            "reliability_score": 0.0,
+            **modal_result
+        }
+    
+    # Extract reliability score and trajectory status
+    reliability_score = modal_result.get("reliability_score", {})
+    trajectory = modal_result.get("trajectory", {})
+    
+    # Determine success based on reliability score or trajectory status
+    overall_score = 0.0  # Initialize default
+    
+    if isinstance(reliability_score, dict):
+        overall_score = reliability_score.get("overall_score", 0.0)
+        success = overall_score >= 70.0  # Consider 70%+ as success (scores are 0-100)
+        # Return the overall score, not the entire dict
+        final_reliability_score = overall_score
+    elif isinstance(reliability_score, (int, float)):
+        overall_score = float(reliability_score)
+        success = overall_score >= 70.0  # Consider 70%+ as success (scores are 0-100)
+        final_reliability_score = overall_score
+    else:
+        # Fallback to trajectory status
+        trajectory_status = trajectory.get("status", "unknown")
+        success = trajectory_status == "success"
+        overall_score = 100.0 if success else 0.0
+        final_reliability_score = overall_score
+    
+    # Calculate execution time and cost
+    execution_time = trajectory.get("execution_time_seconds", 0)
+    token_usage = trajectory.get("token_usage", {})
+    cost = token_usage.get("total_cost", 0.001)
+    
+    # Create result with modal_result first, then override specific fields
+    result = {**modal_result}
+    result.update({
+        "success": success,
+        "execution_time": execution_time,
+        "cost": cost,
+        "reliability_score": final_reliability_score,
+    })
+    
+    return result
 
 
 async def _execute_with_streaming_analysis(

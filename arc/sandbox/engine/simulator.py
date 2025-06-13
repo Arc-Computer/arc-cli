@@ -72,6 +72,42 @@ def evaluate_single_scenario(
     scenario_with_config: tuple[dict[str, Any], dict[str, Any], int],
 ) -> dict[str, Any]:
     """Evaluate a single scenario. Designed for parallel execution with .map()"""
+    return _evaluate_scenario_impl(scenario_with_config)
+
+
+@app.function(
+    image=arc_image,
+    secrets=[modal.Secret.from_name("openai-secret")],
+    timeout=300,
+    min_containers=1,
+    max_containers=50,
+    scaledown_window=60,
+)
+@modal.fastapi_endpoint(method="POST")
+def evaluate_scenario_endpoint(request_data: dict) -> dict[str, Any]:
+    """
+    Web endpoint version of evaluate_single_scenario.
+    Can be called via HTTP without Modal authentication.
+    
+    Expected request format:
+    {
+        "scenario": {...},
+        "agent_config": {...},
+        "scenario_index": 0
+    }
+    """
+    scenario = request_data["scenario"]
+    agent_config = request_data["agent_config"]
+    scenario_index = request_data.get("scenario_index", 0)
+    
+    scenario_with_config = (scenario, agent_config, scenario_index)
+    return _evaluate_scenario_impl(scenario_with_config)
+
+
+def _evaluate_scenario_impl(
+    scenario_with_config: tuple[dict[str, Any], dict[str, Any], int],
+) -> dict[str, Any]:
+    """Shared implementation for both function and web endpoint versions"""
 
     # Unpack the tuple (scenario, agent_config, index)
     scenario, agent_config, scenario_index = scenario_with_config

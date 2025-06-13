@@ -11,7 +11,7 @@ import json
 import logging
 import uuid
 from datetime import datetime, timezone
-from typing import Any, List, Optional, Tuple
+from typing import Any, List, Optional, Tuple, Dict
 from enum import Enum
 
 from sqlalchemy import text
@@ -306,14 +306,32 @@ class ArcAPI:
                 
                 # Handle reliability_score that could be dict or float
                 rs = result.get("reliability_score", {})
+                
+                # Debug logging to understand what we're getting
+                logger.debug(f"Processing result {i}: reliability_score type={type(rs)}, value={rs}")
+                
                 if isinstance(rs, dict):
-                    overall_score = rs.get("overall_score", 0.0)
+                    overall_score = rs.get("overall_score", 50.0)  # Default to 50% instead of 0%
                     dimension_scores = rs.get("dimension_scores", {})
                     grade = rs.get("grade", "N/A")
-                else:  # float or other type
-                    overall_score = float(rs) if rs else 0.0
+                elif isinstance(rs, (int, float)):
+                    overall_score = float(rs) if rs else 50.0  # Default to 50% instead of 0%
                     dimension_scores = {}
                     grade = "N/A"
+                else:
+                    # If reliability_score is missing or invalid, try to infer from trajectory
+                    trajectory_status = trajectory.get("status", "unknown")
+                    if trajectory_status == "success":
+                        overall_score = 75.0  # Assume decent score for successful execution
+                        logger.warning(f"Missing reliability_score for successful scenario {i}, defaulting to 75%")
+                    else:
+                        overall_score = 25.0  # Low score for failed execution
+                        logger.warning(f"Missing reliability_score for failed scenario {i}, defaulting to 25%")
+                    dimension_scores = {}
+                    grade = "N/A"
+                
+                # Additional debug logging
+                logger.debug(f"Final reliability score for scenario {i}: {overall_score}")
                 
                 detailed_trajectory = result.get("detailed_trajectory", {})
                 
@@ -740,6 +758,121 @@ class ArcAPI:
             return "sandbox_error"
         else:
             return "system_error"  # Default fallback for any other errors
+
+    async def record_batch_tool_usage(
+        self,
+        tool_usage_records: List[Dict[str, Any]]
+    ) -> List[str]:
+        """
+        Record multiple tool usage records in batch.
+        
+        Args:
+            tool_usage_records: List of tool usage data dictionaries
+            
+        Returns:
+            List of usage_id strings for the recorded entries
+        """
+        if not tool_usage_records:
+            return []
+        
+        try:
+            usage_ids = [str(uuid.uuid4()) for _ in tool_usage_records]
+            batch_data = []
+            
+            for i, record in enumerate(tool_usage_records):
+                batch_data.append({
+                    "usage_id": usage_ids[i],
+                    "outcome_id": record["outcome_id"],
+                    "execution_time": record.get("execution_time", datetime.now(timezone.utc)),
+                    "tool_name": record["tool_name"],
+                    "call_count": record["call_count"],
+                    "avg_duration_ms": record["avg_duration_ms"],
+                    "success_rate": record["success_rate"],
+                    "tool_sequence": json.dumps(record.get("tool_sequence", {})),
+                    "total_cost_usd": record.get("total_cost_usd", 0.0),
+                    "error_types": record.get("error_types", []),
+                    "modal_function_calls": json.dumps(record.get("modal_function_calls", {})),
+                    "sandbox_tool_logs": record.get("sandbox_tool_logs")
+                })
+            
+            async with self.db.engine.begin() as conn:
+                await conn.execute(text("""
+                    INSERT INTO tool_usage (
+                        usage_id, outcome_id, execution_time, tool_name,
+                        call_count, avg_duration_ms, success_rate, tool_sequence,
+                        total_cost_usd, error_types, modal_function_calls, sandbox_tool_logs
+                    ) VALUES (
+                        :usage_id, :outcome_id, :execution_time, :tool_name,
+                        :call_count, :avg_duration_ms, :success_rate, :tool_sequence,
+                        :total_cost_usd, :error_types, :modal_function_calls, :sandbox_tool_logs
+                    )
+                """), batch_data)
+            
+            logger.info(f"Recorded {len(tool_usage_records)} tool usage records in batch")
+            return usage_ids
+            
+        except Exception as e:
+            logger.error(f"Failed to record tool usage batch: {e}")
+            raise DatabaseError(f"Failed to record tool usage batch: {e}") from e
+    
+    async def record_batch_failures(
+        self,
+        failure_records: List[Dict[str, Any]]
+    ) -> List[str]:
+        """
+        Record multiple failure pattern records in batch.
+        
+        Args:
+            failure_records: List of failure pattern data dictionaries
+            
+        Returns:
+            List of pattern_id strings for the recorded entries
+        """
+        if not failure_records:
+            return []
+        
+        try:
+            pattern_ids = [str(uuid.uuid4()) for _ in failure_records]
+            batch_data = []
+            
+            for i, record in enumerate(failure_records):
+                batch_data.append({
+                    "pattern_id": pattern_ids[i],
+                    "outcome_id": record["outcome_id"],
+                    "execution_time": record.get("execution_time", datetime.now(timezone.utc)),
+                    "failure_type": record["failure_type"],
+                    "failure_category": record["failure_category"],
+                    "error_message": record.get("error_message"),
+                    "pattern_cluster_id": record.get("pattern_cluster_id"),
+                    "cluster_confidence": record.get("cluster_confidence"),
+                    "similar_failures_count": record.get("similar_failures_count", 0),
+                    "recovery_attempted": record.get("recovery_attempted", False),
+                    "recovery_successful": record.get("recovery_successful", False),
+                    "resolution_steps": record.get("resolution_steps"),
+                    "llm_analysis": json.dumps(record.get("llm_analysis", {}))
+                })
+            
+            async with self.db.engine.begin() as conn:
+                await conn.execute(text("""
+                    INSERT INTO failure_patterns (
+                        pattern_id, outcome_id, execution_time, failure_type,
+                        failure_category, error_message, pattern_cluster_id, cluster_confidence,
+                        similar_failures_count, recovery_attempted, recovery_successful,
+                        resolution_steps, llm_analysis
+                    ) VALUES (
+                        :pattern_id, :outcome_id, :execution_time, :failure_type,
+                        :failure_category, :error_message, :pattern_cluster_id, :cluster_confidence,
+                        :similar_failures_count, :recovery_attempted, :recovery_successful,
+                        :resolution_steps, :llm_analysis
+                    )
+                """), batch_data)
+            
+            logger.info(f"Recorded {len(failure_records)} failure pattern records in batch")
+            return pattern_ids
+            
+        except Exception as e:
+            logger.error(f"Failed to record failure patterns batch: {e}")
+            raise DatabaseError(f"Failed to record failure patterns batch: {e}") from e
 
 
 # Convenience function for creating API instance

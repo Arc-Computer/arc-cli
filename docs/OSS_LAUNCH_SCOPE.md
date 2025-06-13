@@ -1,41 +1,34 @@
 # Arc OSS Launch Scope
 
-## Core Question: What's the minimum refactoring needed to launch OSS?
+## Core Approach: Clean OSS Package with Abstraction Layer
 
-### Option 1: Full Abstraction (3 weeks)
-**Effort**: High
-- Abstract Modal → Docker execution 
-- Abstract TimescaleDB → SQLite
-- Create plugin architecture
+### Implementation Plan
+**Effort**: Medium-High
+- Create execution abstraction (Modal → Local subprocess/Docker)
+- Create storage abstraction (TimescaleDB → SQLite)
+- Build extraction script to create clean OSS package
+- Implement basic local execution engine
 
-**Pros**: Clean separation, future-proof
-**Cons**: Delays launch, more testing needed
+**Pros**: Clean separation, sustainable architecture
+**Cons**: More upfront work, but worth it for clean OSS offering
 
-### Option 2: Feature Flags (1 week) 
-**Effort**: Low
-- Keep single codebase
-- Add `--cloud` flag to CLI commands
-- Disable Modal/DB imports when not authenticated
-- Ship with "local mode" limitations
+## Implementation Details
 
-**Pros**: Fast to ship, maintain one codebase
-**Cons**: Some features simply won't work locally
-
-
-## Recommendation: Option 2 with these specifics
-
-### Must Have for OSS v1
+### Core OSS Package v1.0
 1. **All** analysis algorithms (`arc/analysis/`, `arc/recommendations/`)
 2. **All** scenarios (`arc/scenarios/`, `arc/database/seed/failure_patterns/`)
 3. **All** CLI commands working locally
-4. Local execution (subprocess/Docker)
+4. Local execution (subprocess initially, Docker optional)
 5. Local storage (SQLite)
+6. Clean abstractions for execution and storage backends
 
-### Nice to Have (can ship v1.1)
-- Local web UI
-- Parallel execution 
-- Plugin system
-- Advanced caching
+### OSS Enhancements (v1.1+)
+- Local web UI (localhost:8080)
+- Dagger integration for container orchestration
+- Parallel execution (10-20 containers)
+- Advanced caching and performance optimization
+- Model adapters for all providers
+- CI/CD templates and integrations
 
 ### Cloud-Only Features (clear differentiation)
 - Modal distributed execution (1000x speed)
@@ -44,34 +37,53 @@
 - Compliance features
 - Cross-org insights
 
-## Key Technical Decisions Needed
+## Technical Architecture
 
-1. **Execution approach for OSS?**
-   - A) Subprocess (simple, no deps)
-   - B) Docker required (better isolation)
-   - C) Both with graceful degradation
+### Abstraction Layers to Build
 
-2. **Storage for OSS?**
-   - A) SQLite only
-   - B) JSON files  
-   - C) Pluggable (SQLite default)
+1. **Execution Backend Interface**
+   ```python
+   # arc/core/interfaces/execution.py
+   class ExecutionBackend(ABC):
+       async def execute_scenario(self, scenario: Scenario) -> Result
+   ```
+   - LocalBackend (subprocess) - v1.0
+   - DaggerBackend (containers) - v1.1
+   - ModalBackend (cloud) - proprietary
 
-3. **How to handle Modal imports?**
-   - A) Try/except with fallback
-   - B) Build script strips them
-   - C) Feature flags
+2. **Storage Backend Interface**
+   ```python
+   # arc/core/interfaces/storage.py
+   class StorageBackend(ABC):
+       async def save_results(self, results: List[Result])
+       async def query_results(self, filters: Dict) -> List[Result]
+   ```
+   - SQLiteBackend - v1.0
+   - TimescaleBackend - proprietary
 
-4. **Web UI priority?**
-   - A) Ship CLI only first
-   - B) Basic localhost:8080 required
-   - C) Full UI from day 1
+3. **Build Script**
+   - Extract clean OSS package without proprietary deps
+   - Automated process to maintain single codebase
 
 ## Proposed Timeline
 
-**Week 1**: Decisions + extraction script
-**Week 2**: Implement + test
-**Week 3**: Polish + launch
+**Week 1**: 
+- Build abstraction interfaces
+- Create extraction/build script
+- Implement LocalBackend
+
+**Week 2**: 
+- Implement SQLiteBackend
+- Test full OSS package
+- Ensure all algorithms work locally
+
+**Week 3**: 
+- Documentation and examples
+- Performance optimization
+- Package and release
 
 ## Success Criteria
 - Developer can run `pip install arc` and test an agent in <5 minutes
-- No Modal/proprietary deps in OSS package
+- Clean OSS package with no proprietary dependencies
+- All core features work locally (analysis, recommendations, scenarios)
+- Clear upgrade path to Arc Cloud for speed/scale

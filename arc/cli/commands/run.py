@@ -811,7 +811,7 @@ async def _execute_with_orchestrator(
             
             batch_task = progress.add_task(
                 "Batch processing...",
-                total=None,
+                total=100,  # Use percentage-based progress
                 status="Ready"
             )
 
@@ -834,8 +834,12 @@ async def _execute_with_orchestrator(
                         update.batch_metrics.get("pending_failures", 0)
                     )
                     
+                    processed = metrics.get('successful_records', 0)
+                    total_records = processed + pending
+                    completion_pct = (processed / total_records * 100) if total_records > 0 else 100
+                    
                     batch_status = f"Pending: {pending} | "
-                    batch_status += f"Processed: {metrics.get('successful_records', 0)} | "
+                    batch_status += f"Processed: {processed} | "
                     batch_status += f"Rate: {metrics.get('records_per_second', 0):.1f} rec/s"
                     
                     if update.batch_metrics.get("circuit_breaker_state") == "OPEN":
@@ -843,13 +847,15 @@ async def _execute_with_orchestrator(
                     
                     progress.update(
                         batch_task,
-                        description="Batch processing...",
+                        completed=completion_pct,
                         status=batch_status
                     )
 
                 # Store latest result
                 if update.latest_result:
-                    results.append(update.latest_result)
+                    # Transform raw Modal result to include success field
+                    transformed_result = _transform_modal_result(update.latest_result)
+                    results.append(transformed_result)
                 
                 total_cost = update.current_cost
 
@@ -859,11 +865,85 @@ async def _execute_with_orchestrator(
             agent_config, scenarios, run_id
         ):
             if update.latest_result:
-                results.append(update.latest_result)
+                # Transform raw Modal result to include success field
+                transformed_result = _transform_modal_result(update.latest_result)
+                results.append(transformed_result)
             total_cost = update.current_cost
 
     execution_time = time.time() - start_time
+    
+    # Calculate final metrics
+    success_count = sum(1 for r in results if r.get("success", False))
+    
+    # Create fallback results if batch processing succeeded but results array is empty
+    if not results and batch_outcomes:
+        # This can happen when Modal execution succeeds but results aren't yielded properly
+        console.print("[yellow]Creating fallback results from batch processing data[/yellow]")
+        for i, outcome in enumerate(batch_outcomes[:scenario_count]):
+            fallback_result = {
+                "success": outcome.get("reliability_score", 0) >= 70.0,
+                "reliability_score": outcome.get("reliability_score", 0),
+                "scenario_id": f"scenario_{i}",
+                "execution_time": outcome.get("execution_time", 0),
+                "cost": outcome.get("cost", 0),
+            }
+            results.append(fallback_result)
+        success_count = sum(1 for r in results if r.get("success", False))
+
     return results, execution_time, total_cost
+
+
+def _transform_modal_result(modal_result: dict[str, Any]) -> dict[str, Any]:
+    """Transform raw Modal result to include success field for reliability calculation."""
+    if isinstance(modal_result, dict) and "error" in modal_result:
+        # This is an error result
+        return {
+            "success": False,
+            "failure_reason": modal_result.get("error", "Unknown error"),
+            "execution_time": 0,
+            "cost": 0,
+            "reliability_score": 0.0,
+            **modal_result
+        }
+    
+    # Extract reliability score and trajectory status
+    reliability_score = modal_result.get("reliability_score", {})
+    trajectory = modal_result.get("trajectory", {})
+    
+    # Determine success based on reliability score or trajectory status
+    overall_score = 0.0  # Initialize default
+    
+    if isinstance(reliability_score, dict):
+        overall_score = reliability_score.get("overall_score", 0.0)
+        success = overall_score >= 70.0  # Consider 70%+ as success (scores are 0-100)
+        # Return the overall score, not the entire dict
+        final_reliability_score = overall_score
+    elif isinstance(reliability_score, (int, float)):
+        overall_score = float(reliability_score)
+        success = overall_score >= 70.0  # Consider 70%+ as success (scores are 0-100)
+        final_reliability_score = overall_score
+    else:
+        # Fallback to trajectory status
+        trajectory_status = trajectory.get("status", "unknown")
+        success = trajectory_status == "success"
+        overall_score = 100.0 if success else 0.0
+        final_reliability_score = overall_score
+    
+    # Calculate execution time and cost
+    execution_time = trajectory.get("execution_time_seconds", 0)
+    token_usage = trajectory.get("token_usage", {})
+    cost = token_usage.get("total_cost", 0.001)
+    
+    # Create result with modal_result first, then override specific fields
+    result = {**modal_result}
+    result.update({
+        "success": success,
+        "execution_time": execution_time,
+        "cost": cost,
+        "reliability_score": final_reliability_score,
+    })
+    
+    return result
 
 
 async def _execute_with_streaming_analysis(

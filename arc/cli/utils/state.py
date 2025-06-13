@@ -6,7 +6,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from arc.cli.utils.file_utils import atomic_write_json
+from .file_utils import atomic_write_json
+from .json_utils import json_serializer
 
 
 @dataclass
@@ -133,7 +134,7 @@ class CLIState:
 
     def _save_config(self) -> None:
         """Save CLI configuration."""
-        atomic_write_json(self.config_file, self.config, indent=2)
+        atomic_write_json(self.config_file, self.config, indent=2, default=json_serializer)
 
     def save_run(self, result: RunResult) -> Path:
         """Save run results using atomic file operations.
@@ -151,13 +152,13 @@ class CLIState:
         # Save files atomically
         try:
             # Save run metadata
-            atomic_write_json(run_dir / "result.json", result.to_dict(), indent=2)
+            atomic_write_json(run_dir / "result.json", result.to_dict(), indent=2, default=json_serializer)
 
             # Save scenarios
-            atomic_write_json(run_dir / "scenarios.json", result.scenarios, indent=2)
+            atomic_write_json(run_dir / "scenarios.json", result.scenarios, indent=2, default=json_serializer)
 
             # Save results
-            atomic_write_json(run_dir / "results.json", result.results, indent=2)
+            atomic_write_json(run_dir / "results.json", result.results, indent=2, default=json_serializer)
 
             # Update config
             self.config["last_run_id"] = result.run_id
@@ -222,7 +223,7 @@ class CLIState:
         if not run_dir.exists():
             raise ValueError(f"Run {run_id} not found")
 
-        atomic_write_json(run_dir / "analysis.json", analysis, indent=2)
+        atomic_write_json(run_dir / "analysis.json", analysis, indent=2, default=json_serializer)
 
     def save_recommendations(
         self, run_id: str, recommendations: dict[str, Any]
@@ -232,7 +233,7 @@ class CLIState:
         if not run_dir.exists():
             raise ValueError(f"Run {run_id} not found")
 
-        atomic_write_json(run_dir / "recommendations.json", recommendations, indent=2)
+        atomic_write_json(run_dir / "recommendations.json", recommendations, indent=2, default=json_serializer)
 
     def save_diff(self, diff_id: str, diff_result: dict[str, Any]) -> None:
         """Save A/B test diff results.
@@ -245,7 +246,7 @@ class CLIState:
         diffs_dir.mkdir(exist_ok=True)
 
         diff_file = diffs_dir / f"{diff_id}.json"
-        atomic_write_json(diff_file, diff_result, indent=2, default=str)
+        atomic_write_json(diff_file, diff_result, indent=2, default=json_serializer)
 
     def list_runs(self, limit: int = 10) -> list[dict[str, Any]]:
         """List recent runs.

@@ -19,6 +19,11 @@ from .api import ArcAPI
 logger = logging.getLogger(__name__)
 
 
+class ResourceLimitError(Exception):
+    """Raised when batch processing resource limits are exceeded."""
+    pass
+
+
 @dataclass
 class BatchMetrics:
     """Metrics for batch processing performance."""
@@ -56,6 +61,66 @@ class BatchConfig:
     enable_circuit_breaker: bool = True
     circuit_breaker_threshold: int = 5
     circuit_breaker_timeout: float = 60.0
+    max_memory_mb: int = 100  # Maximum memory usage for all batches combined
+    max_total_pending_records: int = 1000  # Maximum total records across all batches
+    
+    @classmethod
+    def for_production(cls) -> 'BatchConfig':
+        """Production-optimized configuration."""
+        return cls(
+            max_batch_size=500,
+            flush_interval_seconds=15.0,
+            max_retries=5,
+            retry_delay_seconds=2.0,
+            enable_circuit_breaker=True,
+            circuit_breaker_threshold=10,
+            circuit_breaker_timeout=120.0,
+            max_memory_mb=500,
+            max_total_pending_records=5000
+        )
+    
+    @classmethod
+    def for_development(cls) -> 'BatchConfig':
+        """Development-friendly configuration."""
+        return cls(
+            max_batch_size=10,
+            flush_interval_seconds=5.0,
+            max_retries=2,
+            retry_delay_seconds=0.5,
+            enable_circuit_breaker=False,
+            circuit_breaker_threshold=3,
+            circuit_breaker_timeout=30.0,
+            max_memory_mb=50,
+            max_total_pending_records=100
+        )
+    
+    @classmethod
+    def for_testing(cls) -> 'BatchConfig':
+        """Testing configuration with immediate flushing."""
+        return cls(
+            max_batch_size=1,
+            flush_interval_seconds=0.1,
+            max_retries=1,
+            retry_delay_seconds=0.1,
+            enable_circuit_breaker=False,
+            circuit_breaker_threshold=1,
+            circuit_breaker_timeout=1.0,
+            max_memory_mb=10,
+            max_total_pending_records=10
+        )
+    
+    def __post_init__(self):
+        """Validate configuration parameters."""
+        if self.max_batch_size <= 0:
+            raise ValueError("max_batch_size must be positive")
+        if self.flush_interval_seconds <= 0:
+            raise ValueError("flush_interval_seconds must be positive")
+        if self.max_retries < 0:
+            raise ValueError("max_retries must be non-negative")
+        if self.max_memory_mb <= 0:
+            raise ValueError("max_memory_mb must be positive")
+        if self.max_total_pending_records <= 0:
+            raise ValueError("max_total_pending_records must be positive")
 
 
 class CircuitBreaker:
@@ -119,10 +184,16 @@ class BatchExecutionRecorder:
             db_api: Database API instance
             config: Batch processing configuration
             on_batch_complete: Optional callback for batch completion events
+            
+        Raises:
+            ValueError: If database API doesn't support required batch operations
         """
         self.db_api = db_api
         self.config = config or BatchConfig()
         self.on_batch_complete = on_batch_complete
+        
+        # Validate database API compatibility
+        self._validate_db_api_compatibility()
         
         # Batch storage
         self._outcome_batch: List[Dict[str, Any]] = []
@@ -146,6 +217,23 @@ class BatchExecutionRecorder:
         logger.info(f"BatchExecutionRecorder initialized with batch_size={self.config.max_batch_size}, "
                    f"flush_interval={self.config.flush_interval_seconds}s")
     
+    def _validate_db_api_compatibility(self):
+        """Validate that the database API supports required batch operations."""
+        required_methods = ['record_batch_outcomes', 'record_batch_tool_usage', 'record_batch_failures']
+        missing_methods = []
+        
+        for method in required_methods:
+            if not hasattr(self.db_api, method):
+                missing_methods.append(method)
+        
+        if missing_methods:
+            raise ValueError(
+                f"Database API missing required batch methods: {missing_methods}. "
+                f"Please ensure your ArcAPI version supports batch processing."
+            )
+        
+        logger.info("All required batch processing methods are available in database API")
+    
     async def start(self):
         """Start the batch processor with automatic flushing."""
         if self._flush_task is None:
@@ -156,9 +244,38 @@ class BatchExecutionRecorder:
         """Stop the batch processor and flush remaining data."""
         self._shutdown_event.set()
         if self._flush_task:
-            await self._flush_task
+            try:
+                await asyncio.wait_for(self._flush_task, timeout=30.0)
+            except asyncio.TimeoutError:
+                logger.warning("Auto-flush task did not complete within timeout, cancelling")
+                self._flush_task.cancel()
+                try:
+                    await self._flush_task
+                except asyncio.CancelledError:
+                    pass
         await self.flush_all()
         logger.info("Batch processor stopped")
+    
+    async def _check_resource_limits(self):
+        """Check if adding another record would exceed resource limits."""
+        total_pending = (
+            len(self._outcome_batch) + 
+            len(self._tool_usage_batch) + 
+            len(self._failure_batch)
+        )
+        
+        # Check total record limit
+        if total_pending >= self.config.max_total_pending_records:
+            logger.warning(f"Total pending records ({total_pending}) approaching limit "
+                          f"({self.config.max_total_pending_records}), forcing flush")
+            await self.flush_all()
+        
+        # If circuit breaker is open and we have pending records, flush them
+        if (self.circuit_breaker and 
+            not self.circuit_breaker.can_execute() and 
+            total_pending > 0):
+            logger.warning("Circuit breaker OPEN with pending records - forcing flush to prevent data loss")
+            await self.flush_all()
     
     async def add_outcome(
         self,
@@ -175,7 +292,13 @@ class BatchExecutionRecorder:
             scenario_result: Complete result dict from evaluate_single_scenario
             modal_call_id: Modal function call ID
             sandbox_id: Sandbox instance ID
+            
+        Raises:
+            ResourceLimitError: If adding this record would exceed resource limits
         """
+        # Check resource limits before adding
+        await self._check_resource_limits()
+        
         outcome_data = {
             "simulation_id": simulation_id,
             "scenario_result": scenario_result,
@@ -205,13 +328,29 @@ class BatchExecutionRecorder:
             await self._flush_failures()
     
     async def flush_all(self):
-        """Flush all pending batches."""
-        await asyncio.gather(
-            self._flush_outcomes(),
-            self._flush_tool_usage(),
-            self._flush_failures(),
-            return_exceptions=True
-        )
+        """Flush all pending batches in parallel for optimal performance."""
+        # Execute all flush operations concurrently
+        flush_tasks = []
+        
+        if self._outcome_batch:
+            flush_tasks.append(self._flush_outcomes())
+        if self._tool_usage_batch:
+            flush_tasks.append(self._flush_tool_usage())
+        if self._failure_batch:
+            flush_tasks.append(self._flush_failures())
+        
+        if flush_tasks:
+            # Execute all flushes in parallel and collect results
+            results = await asyncio.gather(*flush_tasks, return_exceptions=True)
+            
+            # Log any exceptions that occurred
+            for i, result in enumerate(results):
+                if isinstance(result, Exception):
+                    batch_type = ["outcomes", "tool_usage", "failures"][i]
+                    logger.error(f"Failed to flush {batch_type} batch: {result}")
+                    # Re-raise the first exception encountered
+                    if i == 0:  # Only re-raise the first exception to avoid multiple exceptions
+                        raise result
     
     async def _flush_outcomes(self):
         """Flush the outcomes batch to database."""
@@ -282,13 +421,34 @@ class BatchExecutionRecorder:
         batch_size = len(self._tool_usage_batch)
         start_time = time.time()
         
+        # Check circuit breaker
+        if self.circuit_breaker and not self.circuit_breaker.can_execute():
+            logger.warning(f"Circuit breaker OPEN - skipping batch of {batch_size} tool usage records")
+            return
+        
         try:
-            # Implement tool usage batch processing here
-            # For now, just clear the batch
+            # Use batch API method directly
+            await self._retry_operation(
+                lambda: self.db_api.record_batch_tool_usage(self._tool_usage_batch)
+            )
+            
             processing_time = time.time() - start_time
+            self.metrics.update_metrics(batch_size, processing_time, success=True)
+            
+            if self.circuit_breaker:
+                self.circuit_breaker.record_success()
+            
             logger.debug(f"Flushed {batch_size} tool usage records in {processing_time:.3f}s")
+            
         except Exception as e:
+            processing_time = time.time() - start_time
+            self.metrics.update_metrics(batch_size, processing_time, success=False)
+            
+            if self.circuit_breaker:
+                self.circuit_breaker.record_failure()
+            
             logger.error(f"Failed to flush tool usage batch: {e}")
+            raise
         finally:
             self._tool_usage_batch.clear()
     
@@ -300,13 +460,34 @@ class BatchExecutionRecorder:
         batch_size = len(self._failure_batch)
         start_time = time.time()
         
+        # Check circuit breaker
+        if self.circuit_breaker and not self.circuit_breaker.can_execute():
+            logger.warning(f"Circuit breaker OPEN - skipping batch of {batch_size} failure records")
+            return
+        
         try:
-            # Implement failure batch processing here
-            # For now, just clear the batch
+            # Use batch API method directly
+            await self._retry_operation(
+                lambda: self.db_api.record_batch_failures(self._failure_batch)
+            )
+            
             processing_time = time.time() - start_time
+            self.metrics.update_metrics(batch_size, processing_time, success=True)
+            
+            if self.circuit_breaker:
+                self.circuit_breaker.record_success()
+            
             logger.debug(f"Flushed {batch_size} failure records in {processing_time:.3f}s")
+            
         except Exception as e:
+            processing_time = time.time() - start_time
+            self.metrics.update_metrics(batch_size, processing_time, success=False)
+            
+            if self.circuit_breaker:
+                self.circuit_breaker.record_failure()
+            
             logger.error(f"Failed to flush failures batch: {e}")
+            raise
         finally:
             self._failure_batch.clear()
     

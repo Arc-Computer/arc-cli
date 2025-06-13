@@ -17,6 +17,7 @@ engine to provide several key features for the Arc platform:
     providing a clean, high-level API for running evaluation suites.
 """
 import asyncio
+import logging
 import os
 import time
 from dataclasses import dataclass
@@ -34,6 +35,8 @@ from arc.database.api import ArcAPI
 from arc.database.batch_processor import BatchExecutionRecorder, BatchConfig, batch_processor_context
 from arc.cli.utils import ArcConsole
 from arc.sandbox.engine.simulator import app as modal_app, evaluate_single_scenario
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -73,13 +76,18 @@ class ModalOrchestrator:
         self.console = console or ArcConsole()
         self.modal_app_name = "arc-eval-sandbox"
         
-        # Batch processing configuration
-        self.batch_config = BatchConfig(
-            max_batch_size=100,  # Process 100 outcomes at once
-            flush_interval_seconds=30.0,  # Flush every 30 seconds
-            max_retries=3,
-            enable_circuit_breaker=True
-        )
+        # Batch processing configuration based on environment
+        env = os.getenv('ARC_ENV', 'development').lower()
+        if env == 'production':
+            self.batch_config = BatchConfig.for_production()
+        elif env == 'testing':
+            self.batch_config = BatchConfig.for_testing()
+        else:
+            self.batch_config = BatchConfig.for_development()
+        
+        logger.info(f"Using batch configuration for {env} environment: "
+                   f"batch_size={self.batch_config.max_batch_size}, "
+                   f"flush_interval={self.batch_config.flush_interval_seconds}s")
         
         # Verify Modal version compatibility
         self._verify_modal_version()
@@ -215,12 +223,25 @@ class ModalOrchestrator:
                     try:
                         from arc.modal.public_api import ArcModalAPI
                         modal_available = ArcModalAPI.is_available()
+                        if modal_available:
+                            self.console.print("[bold green]Using deployed Modal web endpoint[/bold green]")
+                        else:
+                            self.console.print("[bold yellow]Modal web endpoint not available - falling back to simulation[/bold yellow]")
                     except ImportError:
                         modal_available = False
-                elif not os.environ.get("MODAL_TOKEN_ID") or not os.environ.get("MODAL_TOKEN_SECRET"):
-                    modal_available = False
-            except Exception:
+                        self.console.print("[bold yellow]Modal public API not available - falling back to simulation[/bold yellow]")
+                else:
+                    # Check for local Modal authentication
+                    try:
+                        import modal
+                        # Try to authenticate - this will fail if no token
+                        modal.Function.from_name("test", "test")
+                    except Exception:
+                        modal_available = False
+                        self.console.print("[bold yellow]Modal authentication not available - falling back to simulation[/bold yellow]")
+            except Exception as e:
                 modal_available = False
+                self.console.print(f"[bold yellow]Modal check failed: {e} - falling back to simulation[/bold yellow]")
 
             if modal_available:
                 # Check if using deployed app
@@ -282,7 +303,13 @@ class ModalOrchestrator:
                                 sandbox_id=f"deployed_sandbox_{completed_count}"
                             )
                         except Exception as e:
+                            # Log error but don't stop execution - batch processor handles retries
+                            logger.error(f"Failed to add outcome to batch processor: {e}")
                             self.console.print(f"[bold red]Batch Processing Error:[/bold red] {e}")
+                            # For critical errors, we might want to fall back to individual processing
+                            if "ResourceLimitError" in str(type(e)) or "ValueError" in str(type(e)):
+                                logger.critical(f"Critical batch processing error: {e}")
+                                raise
                         
                         # Yield real-time progress update with batch metrics
                         yield ProgressUpdate(
@@ -355,7 +382,13 @@ class ModalOrchestrator:
                                     sandbox_id=f"sandbox_{i}"
                                 )
                             except Exception as e:
+                                # Log error but don't stop execution - batch processor handles retries
+                                logger.error(f"Failed to add outcome to batch processor: {e}")
                                 self.console.print(f"[bold red]Batch Processing Error:[/bold red] {e}")
+                                # For critical errors, we might want to fall back to individual processing
+                                if "ResourceLimitError" in str(type(e)) or "ValueError" in str(type(e)):
+                                    logger.critical(f"Critical batch processing error: {e}")
+                                    raise
                             
                             # Yield real-time progress update with batch metrics
                             yield ProgressUpdate(

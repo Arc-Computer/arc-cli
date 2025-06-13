@@ -322,8 +322,15 @@ async def _run_impl(
             calc_task = progress.add_task("Calculating reliability metrics...", total=None)
             success_count = sum(1 for r in results if r.get("success"))
             failure_count = len(results) - success_count
-            # Calculate average reliability score - this is the real performance metric
-            avg_reliability = sum(r.get("reliability_score", 0) for r in results) / len(results) if results else 0
+            
+            # Calculate average reliability score with consistent 0-1 scale normalization
+            normalized_scores = []
+            for r in results:
+                raw_score = r.get("reliability_score", 0)
+                normalized_score = normalize_reliability_score(raw_score)
+                normalized_scores.append(normalized_score)
+            
+            avg_reliability = sum(normalized_scores) / len(normalized_scores) if normalized_scores else 0
             progress.update(calc_task, description=f"✓ Reliability: {avg_reliability:.1%} ({success_count}/{len(results)})")
             progress.remove_task(calc_task)  # Remove task to prevent duplicate display
 

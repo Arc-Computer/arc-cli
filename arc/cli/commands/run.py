@@ -322,8 +322,9 @@ async def _run_impl(
             calc_task = progress.add_task("Calculating reliability metrics...", total=None)
             success_count = sum(1 for r in results if r.get("success"))
             failure_count = len(results) - success_count
-            reliability_score = success_count / len(results) if results else 0
-            progress.update(calc_task, description=f"✓ Reliability: {reliability_score:.1%} ({success_count}/{len(results)})")
+            # Calculate average reliability score - this is the real performance metric
+            avg_reliability = sum(r.get("reliability_score", 0) for r in results) / len(results) if results else 0
+            progress.update(calc_task, description=f"✓ Reliability: {avg_reliability:.1%} ({success_count}/{len(results)})")
             progress.remove_task(calc_task)  # Remove task to prevent duplicate display
 
             # Analyze assumption violations
@@ -361,7 +362,7 @@ async def _run_impl(
                 scenario_count=len(generated_scenarios),
                 success_count=success_count,
                 failure_count=failure_count,
-                reliability_score=reliability_score,
+                reliability_score=avg_reliability,
                 execution_time=execution_time,
                 total_cost=actual_cost,
                 scenarios=[
@@ -388,9 +389,6 @@ async def _run_impl(
 
             print(json.dumps(final_run_result.to_dict(), indent=2))
         else:
-            # Calculate average reliability score - this is the real performance metric
-            avg_reliability = sum(r.get("reliability_score", 0) for r in results) / len(results) if results else 0
-            
             console.print()
             console.print("[bold green]📊 Execution Results[/bold green]")
             console.print(f"  └── [cyan]Reliability Score:[/cyan] {avg_reliability:.1%}")

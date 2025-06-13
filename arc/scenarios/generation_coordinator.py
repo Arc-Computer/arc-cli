@@ -16,6 +16,9 @@ from .pattern_selector import PatternSelector
 from .scenario_instantiator import ScenarioInstantiator
 from .quality_scorer import ScenarioQualityScorer
 from .deduplicator import ScenarioDeduplicator
+from .pattern_library import EnhancedPatternLibrary
+from .trail_adapter import TrailPatternAdapter
+from .quality_validator import TrailQualityValidator
 
 
 @dataclass
@@ -65,7 +68,8 @@ class GenerationCoordinator:
         use_llm: bool = True,
         quality_threshold: float = 3.0,
         patterns_per_batch: int = 3,
-        scenarios_per_pattern: int = 7
+        scenarios_per_pattern: int = 7,
+        enable_trail_integration: bool = True
     ):
         """Initialize the generation coordinator.
         
@@ -75,12 +79,14 @@ class GenerationCoordinator:
             quality_threshold: Minimum quality score
             patterns_per_batch: Number of patterns per batch
             scenarios_per_pattern: Scenarios to generate per pattern
+            enable_trail_integration: Whether to enable TRAIL dataset integration
         """
         self.api_key = api_key or os.getenv("OPENROUTER_API_KEY")
         self.use_llm = use_llm and bool(self.api_key)
         self.quality_threshold = quality_threshold
         self.patterns_per_batch = patterns_per_batch
         self.scenarios_per_pattern = scenarios_per_pattern
+        self.enable_trail_integration = enable_trail_integration
         
         # Initialize components
         self.pattern_library = PatternLibrary()
@@ -98,12 +104,23 @@ class GenerationCoordinator:
         self.quality_scorer = ScenarioQualityScorer(min_threshold=self.quality_threshold)
         self.deduplicator = ScenarioDeduplicator()
         
+        # Enhanced TRAIL integration components
+        self.enhanced_library: Optional[EnhancedPatternLibrary] = None
+        self.trail_adapter: Optional[TrailPatternAdapter] = None
+        self.trail_validator: Optional[TrailQualityValidator] = None
+        
+        if self.enable_trail_integration:
+            self.enhanced_library = EnhancedPatternLibrary(enable_trail_integration=True)
+            self.trail_adapter = TrailPatternAdapter()
+            self.trail_validator = TrailQualityValidator(quality_threshold=self.quality_threshold)
+        
         # Cost estimation (rough estimates per call)
         self.cost_estimates = {
             "pattern_selection_llm": 0.0002,  # GPT-4.1-mini
             "scenario_instantiation_llm": 0.001,  # GPT-4.1
             "pattern_selection_heuristic": 0.0,
-            "scenario_instantiation_adapter": 0.0
+            "scenario_instantiation_adapter": 0.0,
+            "trail_integration": 0.0  # Cached/local processing
         }
     
     async def generate_scenarios(
@@ -280,7 +297,7 @@ class GenerationCoordinator:
         agent_config: Dict[str, Any],
         count: int = 35
     ) -> Tuple[List[Scenario], GenerationMetrics]:
-        """Generate TRAIL-inspired general capability test scenarios.
+        """Generate TRAIL-based general capability test scenarios using real failure patterns.
         
         Args:
             agent_config: Agent configuration
@@ -289,6 +306,98 @@ class GenerationCoordinator:
         Returns:
             Tuple of (scenarios, metrics)
         """
+        start_time = datetime.now()
+        metrics = GenerationMetrics(total_scenarios_requested=count)
+        
+        if not self.enable_trail_integration or not self.enhanced_library or not self.trail_adapter:
+            # Fallback to original implementation
+            return await self._generate_trail_scenarios_fallback(agent_config, count)
+        
+        try:
+            # Initialize enhanced library if not already done
+            if not hasattr(self.enhanced_library, 'all_patterns') or not self.enhanced_library.all_patterns:
+                print("🔄 Initializing TRAIL pattern library...")
+                library_metrics = await self.enhanced_library.initialize()
+                print(f"✅ Loaded {library_metrics.total_patterns} patterns ({library_metrics.trail_patterns} from TRAIL)")
+            
+            # Extract assumptions for pattern adaptation
+            assumptions = self.assumption_extractor.extract(agent_config)
+            
+            # Get TRAIL patterns from enhanced library
+            trail_patterns = self.enhanced_library.get_trail_patterns()
+            if not trail_patterns:
+                print("⚠️ No TRAIL patterns available, using fallback generation")
+                return await self._generate_trail_scenarios_fallback(agent_config, count)
+            
+            # Adapt TRAIL patterns to agent assumptions
+            print(f"🎯 Adapting {len(trail_patterns)} TRAIL patterns to agent assumptions...")
+            adapted_scenarios, adaptation_metrics = await self.trail_adapter.adapt_patterns_to_assumptions(
+                trail_patterns,
+                assumptions,
+                target_count=count,
+                assumption_types=None  # Use all assumption types
+            )
+            
+            # Apply enhanced quality validation
+            validated_scenarios = []
+            for scenario in adapted_scenarios:
+                if self.trail_validator:
+                    validation_result = self.trail_validator.validate_scenario(scenario)
+                    
+                    # Add validation metrics to scenario metadata
+                    scenario.metadata["trail_validation"] = {
+                        "passed": validation_result.passed,
+                        "overall_score": validation_result.overall_score,
+                        "trail_alignment": validation_result.trail_alignment_score
+                    }
+                    
+                    if validation_result.passed:
+                        validated_scenarios.append(scenario)
+                        metrics.scenarios_passed_quality += 1
+                    else:
+                        metrics.scenarios_failed_quality += 1
+                else:
+                    # No validator available, accept all scenarios
+                    validated_scenarios.append(scenario)
+                    metrics.scenarios_passed_quality += 1
+            
+            # Apply deduplication
+            final_scenarios = []
+            seen_hashes = set()
+            
+            for scenario in validated_scenarios:
+                scenario_hash = self.deduplicator.get_scenario_hash(scenario)
+                if scenario_hash not in seen_hashes:
+                    seen_hashes.add(scenario_hash)
+                    final_scenarios.append(scenario)
+                else:
+                    metrics.duplicates_removed += 1
+            
+            # Trim to requested count
+            final_scenarios = final_scenarios[:count]
+            
+            # Update metrics
+            metrics.total_scenarios_generated = len(final_scenarios)
+            metrics.generation_time_seconds = (datetime.now() - start_time).total_seconds()
+            metrics.estimated_cost += self.cost_estimates["trail_integration"]
+            
+            print(f"✅ Generated {len(final_scenarios)} TRAIL-based scenarios in {metrics.generation_time_seconds:.2f}s")
+            print(f"   📊 Adaptation metrics: {dict(adaptation_metrics.adaptation_rules_used)}")
+            print(f"   🎯 Assumption coverage: {dict(adaptation_metrics.assumption_coverage)}")
+            
+            return final_scenarios, metrics
+            
+        except Exception as e:
+            print(f"⚠️ TRAIL scenario generation failed: {e}")
+            print("   Falling back to original implementation")
+            return await self._generate_trail_scenarios_fallback(agent_config, count)
+    
+    async def _generate_trail_scenarios_fallback(
+        self,
+        agent_config: Dict[str, Any],
+        count: int = 35
+    ) -> Tuple[List[Scenario], GenerationMetrics]:
+        """Fallback TRAIL scenario generation using original implementation."""
         # Ensure diverse coverage across TRAIL categories
         original_patterns = self.patterns_per_batch
         
@@ -358,7 +467,7 @@ class GenerationCoordinator:
     
     def get_generation_stats(self) -> Dict[str, Any]:
         """Get statistics about generation capabilities."""
-        return {
+        stats = {
             "pattern_library": self.pattern_library.get_pattern_stats(),
             "pattern_selector": self.pattern_selector.get_selection_stats(),
             "quality_scorer": {
@@ -371,6 +480,33 @@ class GenerationCoordinator:
                 "hybrid_generation": True,
                 "parallel_batching": True,
                 "quality_filtering": True,
-                "deduplication": True
+                "deduplication": True,
+                "trail_integration": self.enable_trail_integration
             }
         }
+        
+        # Add TRAIL integration stats if enabled
+        if self.enable_trail_integration and self.enhanced_library:
+            try:
+                enhanced_stats = self.enhanced_library.get_library_stats()
+                stats["enhanced_library"] = enhanced_stats
+                stats["trail_integration"] = {
+                    "enabled": True,
+                    "trail_patterns_available": enhanced_stats.get("patterns_by_source", {}).get("trail", 0),
+                    "local_patterns_available": enhanced_stats.get("patterns_by_source", {}).get("local", 0),
+                    "total_patterns": enhanced_stats.get("total_patterns", 0),
+                    "library_version": enhanced_stats.get("library_version", "unknown")
+                }
+            except Exception as e:
+                stats["trail_integration"] = {
+                    "enabled": True,
+                    "status": f"error: {e}",
+                    "fallback_available": True
+                }
+        else:
+            stats["trail_integration"] = {
+                "enabled": False,
+                "reason": "disabled in configuration"
+            }
+        
+        return stats

@@ -201,7 +201,7 @@ async def _save_recommendations_to_database(db_client, run_result, recommendatio
 
 def _generate_recommendations(run_result, model_performance_data: Optional[dict] = None, 
                             recommendation_history: Optional[dict] = None) -> dict[str, Any]:
-    """Generate recommendations based on run and analysis."""
+    """Generate recommendations based on actual failure analysis."""
     recommendations = {
         "run_id": run_result.run_id,
         "current_reliability": run_result.reliability_score,
@@ -209,57 +209,231 @@ def _generate_recommendations(run_result, model_performance_data: Optional[dict]
         "config_changes": [],
         "model_optimization": None,
         "implementation_steps": [],
-        "database_enhanced": model_performance_data is not None
+        "database_enhanced": model_performance_data is not None,
+        "failure_based_analysis": True
     }
     
-    # Analyze top issues from analysis
-    top_issues = run_result.analysis.get("top_issues", [])
+    # Analyze actual failure patterns from enhanced analysis
+    analysis = run_result.analysis or {}
+    failure_clusters = analysis.get("clusters", [])
+    top_issues = analysis.get("top_issues", [])
     
+    # Generate specific recommendations for each failure pattern
     for issue in top_issues:
-        if "currency" in issue["title"].lower():
-            # Currency assumption fix
+        pattern = issue.get("title", "")
+        severity = issue.get("severity", "low")
+        affected_scenarios = issue.get("affected_scenarios", [])
+        technical_details = issue.get("technical_details", "")
+        
+        if "Code Execution" in pattern:
+            # Critical agent execution failures - fix via YAML configuration
+            recommendations["config_changes"].append({
+                "title": "Fix Agent Runtime Errors",
+                "description": f"Agent failing with runtime exceptions during execution. Affects {len(affected_scenarios)} scenarios.",
+                "severity": "critical",
+                "root_cause": f"Agent encounters null/undefined values: {technical_details}",
+                "affected_scenarios": affected_scenarios,
+                "solution": {
+                    "type": "defensive_agent_configuration",
+                    "explanation": "Update system prompt and add validation rules to make agent handle edge cases gracefully",
+                    "yaml_diff": """# Add defensive instructions to system prompt
+system_prompt: |
+  You are a [your agent description]. 
+  
+  CRITICAL ERROR HANDLING RULES:
+  1. Before processing any input, validate it is not null/empty
+  2. If you encounter missing or invalid data, ask for clarification instead of assuming
+  3. When data appears incomplete, explicitly state what is missing
+  4. Never attempt operations on null/undefined values
+  
+  Example defensive patterns:
+  - Before: process(user_input.lower())
+  - After: if user_input and user_input.strip(): process(user_input.lower())
+  
+  If you encounter errors:
+  - Explain what went wrong in simple terms
+  - Ask the user to provide the missing information
+  - Suggest alternative approaches when possible
+
+# Add validation configuration
+validation_rules:
+  - "Check for null/empty inputs before processing"
+  - "Validate data types match expectations"
+  - "Request clarification for ambiguous inputs"
+
+# Add error handling behavior
+error_handling:
+  strategy: "graceful_degradation"
+  fallback_responses:
+    - "I encountered an issue with the input data. Could you please check if all required fields are provided?"
+    - "The data appears to be incomplete. Could you provide more details about [specific missing field]?"
+    - "I'm having trouble processing this request. Could you try rephrasing or providing the information in a different format?"
+"""
+                }
+            })
+            recommendations["expected_improvement"] += 25.0  # High impact for fixing crashes
+            
+        elif "Ambiguous Input" in pattern:
+            # Ambiguous input handling issues
+            recommendations["config_changes"].append({
+                "title": "Improve Ambiguous Input Handling",
+                "description": f"Agent struggles with unclear inputs. Affects {len(affected_scenarios)} scenarios.",
+                "severity": "high",
+                "root_cause": "Agent makes assumptions instead of asking for clarification",
+                "affected_scenarios": affected_scenarios,
+                "solution": {
+                    "type": "clarification_strategy",
+                    "yaml_diff": """system_prompt: |
+  You are a financial analyst. When you encounter ambiguous requests:
+  
+  1. NEVER make assumptions about unclear terms
+  2. ALWAYS ask for clarification when inputs are ambiguous
+  3. Provide specific examples of what you need
+  
+  Examples of ambiguous terms that require clarification:
+  - "last quarter" → Ask: "Which quarter? Q1, Q2, Q3, or Q4 of which year?"
+  - "recent entries" → Ask: "How recent? Last week, month, or specific date range?"
+  - "missing account numbers" → Ask: "Do you mean null, zero, or empty string values?"
+
+clarification_prompts:
+  enabled: true
+  max_clarifications: 2
+  templates:
+    - "I need clarification on '{ambiguous_term}'. Could you specify {clarification_needed}?"
+    - "The term '{ambiguous_term}' could mean several things. Please clarify {options}."
+"""
+                }
+            })
+            recommendations["expected_improvement"] += 15.0
+            
+        elif "Early Execution Failure" in pattern:
+            # Early termination issues - fix via YAML configuration
+            recommendations["config_changes"].append({
+                "title": "Fix Agent Startup Issues",
+                "description": f"Agent fails to start or crashes immediately. Affects {len(affected_scenarios)} scenarios.",
+                "severity": "critical",
+                "root_cause": "Agent configuration or system prompt causes immediate failure",
+                "affected_scenarios": affected_scenarios,
+                "solution": {
+                    "type": "robust_agent_configuration",
+                    "explanation": "Simplify system prompt and add fallback behaviors to prevent startup crashes",
+                    "yaml_diff": """# Simplify system prompt to avoid complex instructions that cause crashes
+system_prompt: |
+  You are a helpful assistant. 
+  
+  STARTUP SAFETY RULES:
+  1. Start with simple acknowledgment of the request
+  2. Break complex tasks into smaller steps
+  3. If you don't understand something, ask for clarification
+  4. Always respond with something, even if it's to ask for help
+  
+  If you encounter any issues:
+  - Don't crash or stop responding
+  - Explain what you're having trouble with
+  - Ask the user to simplify their request
+  - Offer to try a different approach
+
+# Add fallback configuration
+fallback_behavior:
+  enabled: true
+  simple_responses: true
+  max_complexity: "basic"  # Start with basic functionality
+
+# Reduce temperature for more predictable behavior
+temperature: 0.1  # Lower temperature for more stable responses
+
+# Ensure essential tools only
+tools:
+  # Keep only the most essential tools to reduce startup complexity
+  # Remove any tools that might cause initialization issues
+"""
+                }
+            })
+            recommendations["expected_improvement"] += 20.0
+            
+        elif "Currency" in pattern:
+            # Currency handling issues
             recommendations["config_changes"].append({
                 "title": "Add Multi-Currency Support",
-                "description": "Configure agent to handle multiple currencies with explicit conversion",
-                "impact": "high",
-                "yaml_diff": """system_prompt: |
-  You are a financial analyst. When handling monetary values:
-  1. Always identify the currency being used
-  2. Convert to requested currency if different
-  3. Never assume USD unless explicitly stated
-  
+                "description": f"Agent makes currency assumptions. Affects {len(affected_scenarios)} scenarios.",
+                "severity": "medium",
+                "root_cause": "Hard-coded USD assumptions",
+                "affected_scenarios": affected_scenarios,
+                "solution": {
+                    "type": "currency_handling",
+                    "yaml_diff": """system_prompt: |
+  When handling monetary values:
+  1. ALWAYS identify the currency being used
+  2. Convert to requested currency if different  
+  3. NEVER assume USD unless explicitly stated
+  4. Ask for currency clarification if ambiguous
+
 tools:
   - name: currency_converter
-    description: Convert between currencies
-    enabled: true"""
+    description: Convert between currencies with current rates
+    enabled: true
+    
+currency_handling:
+  default_currency: null  # Force explicit currency
+  require_currency_specification: true
+  supported_currencies: ["USD", "EUR", "GBP", "JPY", "CAD", "AUD"]"""
+                }
             })
-            recommendations["expected_improvement"] += 18.0  # Based on demo target
+            recommendations["expected_improvement"] += 12.0
             
-        elif "timeout" in issue["title"].lower():
+        elif "Tool Execution" in pattern:
+            # Tool-related failures - these are critical for agent functionality
+            expected_tools = issue.get("scenario_characteristics", {}).get("expected_tools", [])
             recommendations["config_changes"].append({
-                "title": "Add Request Timeouts",
-                "description": "Configure timeouts to prevent hanging on slow API calls",
-                "impact": "medium",
-                "yaml_diff": """max_execution_time: 30
-request_timeout: 10
-retry_policy:
-  max_attempts: 3
-  backoff: exponential"""
-            })
-            recommendations["expected_improvement"] += 5.0
-            
-        elif "tool" in issue["title"].lower():
-            recommendations["config_changes"].append({
-                "title": "Fix Tool Configuration",
-                "description": "Ensure all tools are properly configured with error handling",
-                "impact": "medium",
-                "yaml_diff": """tools:
-  - name: calculator
+                "title": "Fix Tool Execution Failures",
+                "description": f"Agent failing to use tools properly. Expected tools: {', '.join(expected_tools[:3])}. Affects {len(affected_scenarios)} scenarios.",
+                "severity": "high",
+                "root_cause": f"Tools not working correctly or agent unable to use them: {technical_details}",
+                "affected_scenarios": affected_scenarios,
+                "solution": {
+                    "type": "tool_configuration_and_validation",
+                    "explanation": "Add tool validation, error handling, and fallback behaviors to handle tool failures gracefully",
+                    "yaml_diff": f"""# Ensure tools are properly configured
+tools:
+{chr(10).join(f'  - name: {tool}' for tool in expected_tools[:3])}
     enabled: true
     error_handling: graceful
-    fallback: manual_calculation"""
+    timeout: 30
+    retry_attempts: 2
+    validation: true
+
+# Add tool error handling to system prompt
+system_prompt: |
+  You are a [your agent description].
+  
+  TOOL USAGE RULES:
+  1. Before using any tool, verify it's available and properly configured
+  2. If a tool fails, explain the failure and try alternative approaches
+  3. Never assume tool responses are valid - always validate them
+  4. If tools are unavailable, provide manual alternatives when possible
+  
+  Tool Error Handling:
+  - If a tool returns an error, explain what went wrong
+  - Suggest alternative tools or manual approaches
+  - Don't crash or stop - continue with available functionality
+  
+# Add tool fallback configuration
+tool_fallbacks:
+  enabled: true
+  manual_alternatives: true
+  error_messages: 
+    - "The [tool_name] tool is currently unavailable. Let me try an alternative approach."
+    - "I encountered an issue with [tool_name]. I'll attempt to solve this manually."
+  
+# Add validation rules
+validation_rules:
+  - "Verify tool availability before use"
+  - "Validate all tool responses"
+  - "Provide fallbacks when tools fail"
+"""
+                }
             })
-            recommendations["expected_improvement"] += 3.0
+            recommendations["expected_improvement"] += 18.0  # Higher impact since tools are critical
     
     # Model optimization
     current_model = run_result.analysis.get("model", "openai/gpt-4.1")
@@ -346,45 +520,83 @@ retry_policy:
                 recommendations["model_optimization"]["best_alternative"] = alt
                 break
     
-    # Implementation steps
-    recommendations["implementation_steps"] = [
-        "Create a backup of your current configuration",
-        "Apply the recommended configuration changes",
+    # Generate specific implementation steps based on findings
+    implementation_steps = ["Create a backup of your current configuration file"]
+    
+    # Check for critical configuration issues
+    critical_issues = [change for change in recommendations["config_changes"] 
+                      if change.get("severity") == "critical"]
+    
+    if critical_issues:
+        implementation_steps.extend([
+            "CRITICAL: Fix agent configuration issues first - these cause immediate failures",
+            "Update system prompt with defensive error handling instructions",
+            "Add validation rules and fallback behaviors to your YAML config",
+            "Test configuration changes with a single failing scenario first"
+        ])
+    
+    if recommendations["config_changes"]:
+        implementation_steps.extend([
+            "Apply YAML configuration changes for better input handling",
+            "Update system prompts to handle edge cases and ambiguous inputs",
+            "Add appropriate validation rules and error handling behaviors"
+        ])
+    
+    implementation_steps.extend([
         "Test with a smaller scenario set first (arc run --scenarios 10)",
-        "Monitor for any unexpected behavior",
-        "Run full validation once initial tests pass"
-    ]
+        "Focus testing on previously failing scenarios",
+        "Monitor agent responses for improved error handling",
+        "Run full validation once configuration fixes are confirmed working"
+    ])
+    
+    recommendations["implementation_steps"] = implementation_steps
     
     return recommendations
 
 
 def _display_recommendations_ui(run_result, recommendations, model_performance_data):
-    """Display recommendations in rich UI."""
+    """Display failure-based recommendations in rich UI."""
     console.print()
-    console.print_header("Configuration Improvement Recommendations")
+    console.print_header("Failure-Based Improvement Recommendations")
     
     console.print_metric("Current reliability", f"{run_result.reliability_percentage:.1f}%")
     console.print_metric("Expected improvement", f"+{recommendations['expected_improvement']:.1f} percentage points", style="success")
     
-    if recommendations.get("database_enhanced"):
-        console.print_metric("Analysis type", "Historical data-driven", style="info")
+    if recommendations.get("failure_based_analysis"):
+        console.print_metric("Analysis type", "Based on actual failure patterns", style="info")
     console.print()
+    
+
     
     # Configuration changes
-    console.print("[primary]Recommended Configuration Changes[/primary]")
-    console.print()
-    
-    for i, change in enumerate(recommendations["config_changes"], 1):
-        console.print(f"{i}. [success]{change['title']}[/success]")
-        console.print(f"   {change['description']}", style="muted")
+    if recommendations.get("config_changes"):
+        console.print("[primary]YAML Configuration Improvements[/primary]")
+        console.print("Based on actual failure patterns from your agent execution")
         console.print()
         
-        # Show YAML diff
-        if change.get("yaml_diff"):
-            console.print("   Configuration change:")
-            syntax = Syntax(change["yaml_diff"], "yaml", theme="monokai", line_numbers=False)
-            console.print(Panel(syntax, border_style="muted"))
-        console.print()
+        for i, change in enumerate(recommendations["config_changes"], 1):
+            severity_color = "error" if change.get("severity") == "critical" else "warning" if change.get("severity") == "high" else "info"
+            console.print(f"{i}. [{severity_color}]{change['title']}[/{severity_color}]")
+            console.print(f"   {change['description']}", style="muted")
+            
+            if change.get("root_cause"):
+                console.print(f"   [dim]Root cause: {change['root_cause']}[/dim]")
+            if change.get("affected_scenarios"):
+                console.print(f"   [dim]Affected scenarios: {len(change['affected_scenarios'])}[/dim]")
+            
+            # Show explanation of the fix
+            solution = change.get("solution", {})
+            if solution.get("explanation"):
+                console.print(f"   [info]Solution: {solution['explanation']}[/info]")
+            console.print()
+            
+            # Show YAML diff
+            yaml_diff = change.get("yaml_diff") or solution.get("yaml_diff")
+            if yaml_diff:
+                console.print("   Add to your YAML configuration:")
+                syntax = Syntax(yaml_diff, "yaml", theme="monokai", line_numbers=False)
+                console.print(Panel(syntax, title="YAML Configuration Changes", border_style="info"))
+            console.print()
     
     # Model optimization
     if recommendations.get("model_optimization"):

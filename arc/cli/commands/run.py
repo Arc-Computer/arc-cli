@@ -44,6 +44,7 @@ from arc.ingestion.normalizer import ConfigNormalizer
 from arc.ingestion.parser import AgentConfigParser
 from arc.scenarios.generator import ScenarioGenerator
 from arc.simulation.modal_orchestrator import ModalOrchestrator
+from arc.database.utils import normalize_reliability_score
 
 console = ArcConsole()
 # Will be initialized with database connection if available
@@ -928,20 +929,17 @@ def _transform_modal_result(modal_result: dict[str, Any]) -> dict[str, Any]:
     if isinstance(reliability_score, dict):
         overall_score = reliability_score.get("overall_score", 0.0)
         success = overall_score >= 70.0  # Consider 70%+ as success (scores are 0-100)
-        # Convert from 0-100 scale to 0-1 scale for database
-        final_reliability_score = overall_score / 100.0
     elif isinstance(reliability_score, (int, float)):
         overall_score = float(reliability_score)
         success = overall_score >= 70.0  # Consider 70%+ as success (scores are 0-100)
-        # Convert from 0-100 scale to 0-1 scale for database
-        final_reliability_score = overall_score / 100.0
     else:
         # Fallback to trajectory status
         trajectory_status = trajectory.get("status", "unknown")
         success = trajectory_status == "success"
         overall_score = 100.0 if success else 0.0
-        # Convert from 0-100 scale to 0-1 scale for database
-        final_reliability_score = overall_score / 100.0
+    
+    # Use centralized normalization for database storage
+    final_reliability_score = normalize_reliability_score(reliability_score)
     
     # Calculate execution time and cost
     execution_time = trajectory.get("execution_time_seconds", 0)

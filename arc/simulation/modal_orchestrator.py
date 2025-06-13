@@ -33,6 +33,7 @@ from arc.core.models.config import AgentConfig
 from arc.database.client import ArcDBClient
 from arc.database.api import ArcAPI
 from arc.database.batch_processor import BatchExecutionRecorder, BatchConfig, batch_processor_context
+from arc.database.utils import normalize_modal_result
 from arc.cli.utils import ArcConsole
 from arc.sandbox.engine.simulator import app as modal_app, evaluate_single_scenario
 
@@ -273,11 +274,11 @@ class ModalOrchestrator:
                         batch_metrics=batch_processor.get_status()
                     )
                     
-                    # Execute scenarios using deployed app
+                    # Execute scenarios using deployed app with parallel batches
                     async for result in ArcModalAPI.run_scenarios(
                         scenarios=scenario_dicts,
                         agent_config=agent_config.model_dump(),
-                        batch_size=10
+                        batch_size=20  # Process 20 scenarios in parallel per batch
                     ):
                         completed_count += 1
                         
@@ -297,7 +298,7 @@ class ModalOrchestrator:
                         # Add to batch processor instead of immediate database write
                         try:
                             # Transform the result to ensure 0-1 scale reliability scores for database
-                            transformed_result = self._normalize_reliability_score(result)
+                            transformed_result = normalize_modal_result(result)
                             await batch_processor.add_outcome(
                                 simulation_id=simulation_id,
                                 scenario_result=transformed_result,
@@ -378,7 +379,7 @@ class ModalOrchestrator:
                             # Add to batch processor instead of immediate database write
                             try:
                                 # Transform the result to ensure 0-1 scale reliability scores for database
-                                transformed_result = self._normalize_reliability_score(result)
+                                transformed_result = normalize_modal_result(result)
                                 await batch_processor.add_outcome(
                                     simulation_id=simulation_id,
                                     scenario_result=transformed_result,
@@ -523,25 +524,4 @@ class ModalOrchestrator:
         
         return scenario_count * cost_per_scenario
 
-    def _normalize_reliability_score(self, result: dict) -> dict:
-        """Normalize reliability scores from 0-100 scale to 0-1 scale for database storage."""
-        if not isinstance(result, dict):
-            return result
-        
-        # Create a copy to avoid modifying the original result
-        normalized_result = result.copy()
-        
-        reliability_score = normalized_result.get("reliability_score", {})
-        
-        if isinstance(reliability_score, dict):
-            # Convert overall_score from 0-100 to 0-1
-            if "overall_score" in reliability_score:
-                overall_score = reliability_score["overall_score"]
-                if isinstance(overall_score, (int, float)) and overall_score > 1.0:
-                    normalized_result["reliability_score"] = reliability_score.copy()
-                    normalized_result["reliability_score"]["overall_score"] = overall_score / 100.0
-        elif isinstance(reliability_score, (int, float)) and reliability_score > 1.0:
-            # Convert simple numeric score from 0-100 to 0-1
-            normalized_result["reliability_score"] = reliability_score / 100.0
-        
-        return normalized_result
+

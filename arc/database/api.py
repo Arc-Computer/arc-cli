@@ -17,7 +17,7 @@ from enum import Enum
 from sqlalchemy import text
 
 from arc.database.client import ArcDBClient, DatabaseError, RetryableError
-from arc.database.utils import convert_row_to_dict
+from arc.database.utils import convert_row_to_dict, normalize_reliability_score
 
 logger = logging.getLogger(__name__)
 
@@ -304,34 +304,25 @@ class ArcAPI:
                 scenario = result.get("scenario", {})
                 trajectory = result.get("trajectory", {})
                 
-                # Handle reliability_score that could be dict or float
+                # Use centralized reliability score normalization
                 rs = result.get("reliability_score", {})
                 
                 # Debug logging to understand what we're getting
                 logger.debug(f"Processing result {i}: reliability_score type={type(rs)}, value={rs}")
                 
+                # Extract metadata for trajectory
                 if isinstance(rs, dict):
-                    overall_score = rs.get("overall_score", 50.0)  # Default to 50% instead of 0%
                     dimension_scores = rs.get("dimension_scores", {})
                     grade = rs.get("grade", "N/A")
-                elif isinstance(rs, (int, float)):
-                    overall_score = float(rs) if rs else 50.0  # Default to 50% instead of 0%
-                    dimension_scores = {}
-                    grade = "N/A"
                 else:
-                    # If reliability_score is missing or invalid, try to infer from trajectory
-                    trajectory_status = trajectory.get("status", "unknown")
-                    if trajectory_status == "success":
-                        overall_score = 75.0  # Assume decent score for successful execution
-                        logger.warning(f"Missing reliability_score for successful scenario {i}, defaulting to 75%")
-                    else:
-                        overall_score = 25.0  # Low score for failed execution
-                        logger.warning(f"Missing reliability_score for failed scenario {i}, defaulting to 25%")
                     dimension_scores = {}
                     grade = "N/A"
                 
+                # Use centralized normalization (handles all cases and defaults)
+                normalized_score = normalize_reliability_score(rs)
+                
                 # Additional debug logging
-                logger.debug(f"Final reliability score for scenario {i}: {overall_score}")
+                logger.debug(f"Normalized reliability score for scenario {i}: {normalized_score}")
                 
                 detailed_trajectory = result.get("detailed_trajectory", {})
                 
@@ -344,7 +335,7 @@ class ArcAPI:
                     },
                     "execution_time": datetime.now(timezone.utc),
                     "status": trajectory.get("status", "error"),
-                    "reliability_score": overall_score,
+                    "reliability_score": normalized_score,
                     "execution_time_ms": int(trajectory.get("execution_time_seconds", 0) * 1000),
                     "tokens_used": trajectory.get("token_usage", {}).get("total_tokens", 0),
                     "cost_usd": trajectory.get("token_usage", {}).get("total_cost", 0.0),
@@ -372,12 +363,82 @@ class ArcAPI:
             # Batch insert
             outcome_ids = await self.db.record_outcomes_batch(outcomes)
             
-            # Update simulation-scenario statuses in batch
+            # Update simulation-scenario statuses and count in a transaction
             async with self.db.engine.begin() as conn:
+                # First, check which scenarios are already completed to avoid double-counting
+                scenario_ids = [scenario.get("id", f"scenario_{i}") for i, scenario in enumerate([result.get("scenario", {}) for result in scenario_results])]
+                
+                logger.debug(f"Checking status for scenarios: {scenario_ids}")
+                
+                # Check current status of scenarios in this simulation
+                # Use IN clause instead of ANY for better PostgreSQL compatibility
+                placeholders = ','.join([f':scenario_id_{i}' for i in range(len(scenario_ids))])
+                scenario_params = {f'scenario_id_{i}': scenario_id for i, scenario_id in enumerate(scenario_ids)}
+                
+                check_result = await conn.execute(text(f"""
+                    SELECT scenario_id, status FROM simulations_scenarios
+                    WHERE simulation_id = :simulation_id AND scenario_id IN ({placeholders})
+                """), {
+                    "simulation_id": simulation_id,
+                    **scenario_params
+                })
+                
+                existing_statuses = {row[0]: row[1] for row in check_result.fetchall()}
+                logger.debug(f"Existing scenario statuses: {existing_statuses}")
+                
+                # Also check current simulation completion count
+                sim_check = await conn.execute(text("""
+                    SELECT completed_scenarios, total_scenarios FROM simulations
+                    WHERE simulation_id = :simulation_id
+                """), {"simulation_id": simulation_id})
+                
+                sim_row = sim_check.fetchone()
+                if sim_row:
+                    current_completed = sim_row[0] or 0
+                    total_scenarios = sim_row[1] or 0
+                    logger.debug(f"Current simulation state: {current_completed}/{total_scenarios} completed")
+                else:
+                    current_completed = 0
+                    total_scenarios = 0
+                    logger.warning(f"Could not find simulation {simulation_id}")
+                
+                scenarios_to_update = []
+                new_completions = 0
+                
+                # Update scenario statuses and count only new completions
                 for i, result in enumerate(scenario_results):
                     scenario = result.get("scenario", {})
                     trajectory = result.get("trajectory", {})
+                    scenario_id = scenario.get("id", f"scenario_{i}")
+                    new_status = "completed" if trajectory.get("status") == "success" else "failed"
                     
+                    # Only count as new completion if status is changing from pending/running
+                    current_status = existing_statuses.get(scenario_id, "pending")
+                    if current_status in ["pending", "running"] and new_status in ["completed", "failed"]:
+                        new_completions += 1
+                        logger.debug(f"Scenario {scenario_id}: {current_status} -> {new_status} (new completion)")
+                    else:
+                        logger.debug(f"Scenario {scenario_id}: {current_status} -> {new_status} (already processed)")
+                    
+                    scenarios_to_update.append({
+                        "simulation_id": simulation_id,
+                        "scenario_id": scenario_id,
+                        "status": new_status,
+                        "modal_call_id": modal_call_ids[i] if modal_call_ids else None
+                    })
+                
+                logger.debug(f"New completions to add: {new_completions}")
+                
+                # Check if adding new completions would violate constraint
+                projected_total = current_completed + new_completions
+                if projected_total > total_scenarios:
+                    logger.error(f"Constraint violation: {current_completed} + {new_completions} = {projected_total} > {total_scenarios}")
+                    # Don't throw error, just skip the update to avoid retry loop
+                    new_completions = 0
+                    logger.warning("Skipping completion count update to avoid constraint violation")
+                
+                # Update scenario statuses
+                for scenario_update in scenarios_to_update:
                     await conn.execute(text("""
                         UPDATE simulations_scenarios
                         SET 
@@ -386,22 +447,21 @@ class ArcAPI:
                             started_at = COALESCE(started_at, NOW()),
                             completed_at = NOW()
                         WHERE simulation_id = :simulation_id AND scenario_id = :scenario_id
+                    """), scenario_update)
+                
+                # Only update simulation completed count if there are actual new completions
+                if new_completions > 0:
+                    await conn.execute(text("""
+                        UPDATE simulations
+                        SET completed_scenarios = completed_scenarios + :count
+                        WHERE simulation_id = :simulation_id
                     """), {
                         "simulation_id": simulation_id,
-                        "scenario_id": scenario.get("id", f"scenario_{i}"),
-                        "status": "completed" if trajectory.get("status") == "success" else "failed",
-                        "modal_call_id": modal_call_ids[i] if modal_call_ids else None
+                        "count": new_completions
                     })
-                
-                # Update simulation completed count
-                await conn.execute(text("""
-                    UPDATE simulations
-                    SET completed_scenarios = completed_scenarios + :count
-                    WHERE simulation_id = :simulation_id
-                """), {
-                    "simulation_id": simulation_id,
-                    "count": len(scenario_results)
-                })
+                    logger.info(f"Updated simulation {simulation_id} with {new_completions} new completions ({current_completed} -> {current_completed + new_completions})")
+                else:
+                    logger.info(f"No new completions for simulation {simulation_id} - scenarios already processed")
             
             logger.info(f"Recorded {len(outcome_ids)} outcomes in batch for simulation {simulation_id}")
             return outcome_ids

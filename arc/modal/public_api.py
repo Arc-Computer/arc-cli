@@ -27,7 +27,7 @@ class ArcModalAPI:
     async def run_scenarios(
         scenarios: list[dict[str, Any]],
         agent_config: dict[str, Any],
-        batch_size: int = 10
+        batch_size: int = 20  # Increased for better parallel performance
     ) -> AsyncIterator[dict[str, Any]]:
         """Run scenarios using deployed Modal web endpoint.
 
@@ -52,15 +52,15 @@ class ArcModalAPI:
         print(f"🔍 DEBUG: Using Modal endpoint: {base_url}")
         logger.info(f"Using Modal endpoint: {base_url}")
 
-        # Execute scenarios in batches
+        # Execute scenarios in parallel batches
         async with aiohttp.ClientSession() as session:
             for i in range(0, len(scenarios), batch_size):
                 batch = scenarios[i:i + batch_size]
-
-                # Process each scenario in the batch
-                for j, scenario in enumerate(batch):
-                    scenario_index = i + j
-                    
+                
+                print(f"🔍 DEBUG: Starting parallel batch of {len(batch)} scenarios")
+                
+                # Create concurrent tasks for parallel execution
+                async def process_scenario(scenario, scenario_index):
                     request_data = {
                         "scenario": scenario,
                         "agent_config": agent_config,
@@ -80,7 +80,7 @@ class ArcModalAPI:
                             headers={"Content-Type": "application/json"},
                             timeout=aiohttp.ClientTimeout(total=300)  # 5 minute timeout
                         ) as response:
-                            print(f"🔍 DEBUG: Modal response status: {response.status}")
+                            print(f"🔍 DEBUG: Modal response status: {response.status} for scenario {scenario_index}")
                             logger.info(f"Modal response status: {response.status}")
                             
                             if response.status == 200:
@@ -93,11 +93,11 @@ class ArcModalAPI:
                                 print(f"   Response keys: {list(result.keys())}")
                                 logger.debug(f"Modal response for scenario {scenario_index}: {json.dumps(result, indent=2, default=str)}")
                                 
-                                yield result
+                                return result
                             else:
                                 error_text = await response.text()
                                 # Return error result
-                                error_result = {
+                                return {
                                     "scenario": scenario,
                                     "trajectory": {
                                         "start_time": datetime.now().isoformat(),
@@ -118,11 +118,10 @@ class ArcModalAPI:
                                     "reliability_score": {"overall_score": 0},
                                     "scenario_index": scenario_index,
                                 }
-                                yield error_result
                                  
                     except Exception as e:
                         # Return error result
-                        error_result = {
+                        return {
                             "scenario": scenario,
                             "trajectory": {
                                 "start_time": datetime.now().isoformat(),
@@ -143,7 +142,22 @@ class ArcModalAPI:
                             "reliability_score": {"overall_score": 0},
                             "scenario_index": scenario_index,
                         }
-                        yield error_result
+                
+                # Create tasks for parallel execution
+                tasks = []
+                for j, scenario in enumerate(batch):
+                    scenario_index = i + j
+                    task = asyncio.create_task(process_scenario(scenario, scenario_index))
+                    tasks.append(task)
+                
+                # Wait for all tasks in batch to complete and yield results
+                results = await asyncio.gather(*tasks, return_exceptions=True)
+                for result in results:
+                    if isinstance(result, Exception):
+                        # Handle exceptions from tasks
+                        print(f"🔍 DEBUG: Task failed with exception: {result}")
+                        continue
+                    yield result
 
     @staticmethod
     def is_available() -> bool:

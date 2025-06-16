@@ -11,7 +11,7 @@ patterns and using LLM to generate specific, actionable YAML improvements.
 from .engine import RecommendationEngine, RecommendationRequest, RecommendationResponse
 from .generic_analyzer import GenericAgentAnalyzer, SimulationContext, GenericRecommendation
 from .data_extractor import SimulationDataExtractor
-from .llm_client import LLMClient, MockLLMClient, create_llm_client
+from .llm_client import LLMClient, OpenRouterLLMClient, OpenAILLMClient, AnthropicLLMClient, create_llm_client
 
 __all__ = [
     'RecommendationEngine',
@@ -22,6 +22,8 @@ __all__ = [
     'GenericRecommendation',
     'SimulationDataExtractor',
     'LLMClient',
-    'MockLLMClient',
+    'OpenRouterLLMClient',
+    'OpenAILLMClient',
+    'AnthropicLLMClient',
     'create_llm_client'
 ]

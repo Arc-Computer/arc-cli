@@ -288,12 +288,15 @@ class GenericAgentAnalyzer:
         prompt = self._create_comprehensive_analysis_prompt(analysis_data)
         
         try:
+            logger.info(f"Making LLM call with prompt length: {len(prompt)} characters")
             response = await self.llm_client.generate(prompt)
+            logger.info(f"LLM response received: {len(response)} characters")
             recommendations = self._parse_llm_recommendations(response)
+            logger.info(f"Parsed {len(recommendations)} recommendations")
             return recommendations
             
         except Exception as e:
-            logger.error(f"Error generating LLM recommendations: {e}")
+            logger.error(f"Error generating LLM recommendations: {e}", exc_info=True)
             return []
     
     def _create_comprehensive_analysis_prompt(self, analysis_data: Dict[str, Any]) -> str:
@@ -303,6 +306,19 @@ class GenericAgentAnalyzer:
         failure_patterns = analysis_data["failure_patterns"]
         success_patterns = analysis_data["success_patterns"]
         expectation_gaps = analysis_data["expectation_gaps"]
+        
+        # Convert datetime objects to strings for JSON serialization
+        def convert_datetime_to_string(obj):
+            if isinstance(obj, dict):
+                return {k: convert_datetime_to_string(v) for k, v in obj.items()}
+            elif isinstance(obj, list):
+                return [convert_datetime_to_string(item) for item in obj]
+            elif hasattr(obj, 'isoformat'):  # datetime objects
+                return obj.isoformat()
+            else:
+                return obj
+        
+        performance_summary = convert_datetime_to_string(analysis_data.get('performance_summary', {}))
         
         prompt = f"""
 You are analyzing an AI agent's performance based on ACTUAL SIMULATION DATA. Your task is to provide specific, actionable YAML configuration improvements based on the real data patterns observed.
@@ -329,7 +345,7 @@ EXPECTATION VS REALITY GAPS:
 {self._format_expectation_gaps(expectation_gaps)}
 
 PERFORMANCE METRICS:
-{json.dumps(analysis_data.get('performance_summary', {}), indent=2)}
+{json.dumps(performance_summary, indent=2)}
 
 TASK: Generate specific YAML configuration improvements that directly address the observed issues. Each recommendation should:
 

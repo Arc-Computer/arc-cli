@@ -1,6 +1,7 @@
 """Arc recommend command - get improvement recommendations."""
 
 import asyncio
+import logging
 from typing import Any, Optional
 from datetime import datetime, timedelta
 
@@ -15,6 +16,7 @@ from arc.cli.utils import ArcConsole, CLIState, format_error, format_success, fo
 from arc.cli.utils import db_manager, HybridState
 
 console = ArcConsole()
+logger = logging.getLogger(__name__)
 # Will be initialized based on database availability
 state = None
 
@@ -225,30 +227,89 @@ async def _save_recommendations_to_database(db_client, run_result, recommendatio
 async def _generate_recommendations_async(run_result, model_performance_data: Optional[dict] = None, 
                             recommendation_history: Optional[dict] = None) -> dict[str, Any]:
     """Generate recommendations using the pure LLM-based recommendation engine."""
-    from arc.recommendations import RecommendationEngine, RecommendationRequest
+    from arc.recommendations import RecommendationEngine, RecommendationRequest, RecommendationResponse
     from arc.recommendations.llm_client import create_llm_client
+    from arc.recommendations.data_extractor import SimulationDataExtractor
     
-    # Initialize the pure LLM-based recommendation engine
-    llm_client = create_llm_client("mock")  # Use mock for now, can be configured later
+    # Initialize the pure LLM-based recommendation engine with real LLM
+    logger.info("Creating OpenRouter LLM client...")
+    llm_client = create_llm_client("openrouter")  # Use OpenRouter for real LLM analysis
+    
+    if llm_client:
+        logger.info(f"LLM client created successfully: {type(llm_client).__name__}")
+    else:
+        logger.error("Failed to create LLM client - falling back to basic analysis")
+    
     engine = RecommendationEngine(llm_client=llm_client)
     
-    # Extract and process analysis data for LLM analysis
-    failures, trajectories, scenarios = _extract_analysis_data(run_result.analysis)
+    # Create data extractor and extract simulation context
+    data_extractor = SimulationDataExtractor()
     
-    # Create recommendation request
-    request = RecommendationRequest(
-        failures=failures,
-        trajectories=trajectories,
-        scenarios=scenarios,
-        config_path=run_result.config_path,
-        run_id=run_result.run_id
-    )
-    
-    # Generate LLM-based recommendations
-    response = await engine.generate_recommendations(request)
-    
-    # Convert to output format
-    return _build_response(run_result, response, model_performance_data)
+    try:
+        logger.info("Extracting simulation context from run results...")
+        # First try to extract from run_result directly
+        simulation_context = data_extractor.extract_from_run_result(run_result)
+        
+        # If we have historical data, enrich the context
+        if model_performance_data:
+            logger.info("Enriching with historical performance data...")
+            simulation_context = data_extractor.enrich_with_historical_data(
+                simulation_context, 
+                model_performance_data
+            )
+        
+        logger.info(f"Simulation context prepared with {len(simulation_context.failure_data)} failures and {len(simulation_context.success_data)} successes")
+        
+        # Generate recommendations using the new method
+        recommendations_response = await engine.generate_recommendations_from_context(simulation_context)
+        
+        # Extract the actual recommendations list
+        recommendations = recommendations_response.recommendations if hasattr(recommendations_response, 'recommendations') else []
+        
+        logger.info(f"Generated {len(recommendations)} recommendations")
+        
+        # Use the existing response building logic
+        return _build_response(run_result, recommendations_response, model_performance_data)
+        
+    except Exception as e:
+        logger.error(f"Error in recommendation generation: {e}", exc_info=True)
+        
+        # Fallback to analysis data extraction if run_result extraction fails
+        try:
+            logger.info("Trying fallback extraction from analysis data...")
+            
+            # Use the existing analysis data directly 
+            simulation_context = data_extractor.extract_from_analysis_data(
+                run_result.analysis, 
+                run_result.config_path
+            )
+            
+            if model_performance_data:
+                simulation_context = data_extractor.enrich_with_historical_data(
+                    simulation_context, 
+                    model_performance_data
+                )
+            
+            recommendations_response = await engine.generate_recommendations_from_context(simulation_context)
+            recommendations = recommendations_response.recommendations if hasattr(recommendations_response, 'recommendations') else []
+            
+            # Use the existing response building logic  
+            return _build_response(run_result, recommendations_response, model_performance_data)
+            
+        except Exception as fallback_error:
+            logger.error(f"Fallback extraction also failed: {fallback_error}", exc_info=True)
+            
+            # Return minimal response indicating the issue
+            return {
+                "run_id": run_result.run_id,
+                "recommendations": [],
+                "analysis_metadata": {
+                    "error": "Failed to extract simulation data for analysis",
+                    "analysis_approach": "failed",
+                    "llm_confidence": 0.0
+                },
+                "processing_time_seconds": 0.0
+            }
 
 
 def _extract_analysis_data(analysis: dict):
@@ -450,7 +511,23 @@ def _display_single_config_change(index: int, change: dict):
     yaml_changes = change.get("yaml_changes")
     if yaml_changes:
         console.print("   Add to your YAML configuration:")
-        syntax = Syntax(yaml_changes, "yaml", theme="monokai", line_numbers=False)
+        
+        # Handle both string and dictionary formats
+        if isinstance(yaml_changes, dict):
+            # Convert dict to YAML string
+            try:
+                import yaml
+                yaml_string = yaml.dump(yaml_changes, default_flow_style=False, indent=2)
+            except ImportError:
+                # Fallback to JSON format if PyYAML not available
+                import json
+                yaml_string = json.dumps(yaml_changes, indent=2)
+        elif isinstance(yaml_changes, str):
+            yaml_string = yaml_changes
+        else:
+            yaml_string = str(yaml_changes)
+        
+        syntax = Syntax(yaml_string, "yaml", theme="monokai", line_numbers=False)
         console.print(Panel(syntax, title="LLM-Generated YAML Changes", border_style="info"))
     console.print()
 

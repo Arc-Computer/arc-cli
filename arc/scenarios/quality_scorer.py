@@ -255,50 +255,6 @@ class ScenarioQualityScorer:
         }
 
 
-class ScenarioDeduplicator:
-    """Removes duplicate or highly similar scenarios"""
-    
-    def __init__(self, similarity_threshold: float = 0.85):
-        self.similarity_threshold = similarity_threshold
-    
-    def _calculate_hash(self, scenario: Dict[str, Any]) -> str:
-        """Calculate hash for scenario deduplication"""
-        # Use task prompt and expected error for hash
-        content = f"{scenario.get('task_prompt', '')}-{scenario.get('expected_error', '')}"
-        return hashlib.md5(content.encode()).hexdigest()
-    
-    def deduplicate_batch(self, scenarios: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        """Remove duplicate scenarios from batch"""
-        unique_scenarios = []
-        seen_hashes = set()
-        seen_prompts = []
-        
-        for scenario in scenarios:
-            # Check exact hash match
-            scenario_hash = self._calculate_hash(scenario)
-            if scenario_hash in seen_hashes:
-                continue
-            
-            # Check similarity if Levenshtein available
-            task_prompt = scenario.get('task_prompt', '')
-            is_duplicate = False
-            
-            if HAS_LEVENSHTEIN and seen_prompts:
-                for seen_prompt in seen_prompts:
-                    distance = Levenshtein.distance(task_prompt, seen_prompt)
-                    similarity = 1 - (distance / max(len(task_prompt), len(seen_prompt)))
-                    if similarity > self.similarity_threshold:
-                        is_duplicate = True
-                        break
-            
-            if not is_duplicate:
-                unique_scenarios.append(scenario)
-                seen_hashes.add(scenario_hash)
-                seen_prompts.append(task_prompt)
-        
-        return unique_scenarios
-
-
 # Utility functions
 def score_scenarios_from_file(
     input_file: str,
@@ -306,7 +262,8 @@ def score_scenarios_from_file(
     output_failed: str = "failed_scenarios.json",
     min_threshold: float = 3.0
 ) -> Dict[str, Any]:
-    """Score scenarios from a JSON file"""
+    """Score scenarios from a JSON file (standalone utility function)"""
+    import json
     
     # Load scenarios
     with open(input_file, 'r') as f:

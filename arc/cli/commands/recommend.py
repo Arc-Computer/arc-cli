@@ -1,6 +1,7 @@
 """Arc recommend command - get improvement recommendations."""
 
 import asyncio
+import logging
 from typing import Any, Optional
 from datetime import datetime, timedelta
 
@@ -15,8 +16,11 @@ from arc.cli.utils import ArcConsole, CLIState, format_error, format_success, fo
 from arc.cli.utils import db_manager, HybridState
 
 console = ArcConsole()
+logger = logging.getLogger(__name__)
 # Will be initialized based on database availability
 state = None
+
+# Pure LLM-based recommendations - no hardcoded constants needed
 
 
 async def _initialize_state():
@@ -34,6 +38,16 @@ async def _initialize_state():
         state = CLIState()
     
     return db_connected
+
+
+def _handle_json_error(error_msg: str, json_output: bool):
+    """Handle errors with consistent JSON/console output."""
+    if json_output:
+        import json
+        print(json.dumps({"error": error_msg}, indent=2))
+    else:
+        console.print(format_error(error_msg))
+    raise click.exceptions.Exit(1)
 
 
 @click.command()
@@ -59,12 +73,7 @@ def recommend(run_id: Optional[str], historical: bool, days: int, json_output: b
         # Run async recommendation generation
         asyncio.run(_recommend_async(run_id, historical, days, json_output))
     except Exception as e:
-        if json_output:
-            import json
-            print(json.dumps({"error": str(e)}, indent=2))
-        else:
-            console.print(format_error(f"Recommendation generation failed: {str(e)}"))
-        raise click.exceptions.Exit(1)
+        _handle_json_error(f"Recommendation generation failed: {str(e)}", json_output)
 
 
 async def _recommend_async(run_id: Optional[str], historical: bool, days: int, json_output: bool):
@@ -72,26 +81,40 @@ async def _recommend_async(run_id: Optional[str], historical: bool, days: int, j
     # Initialize state
     db_connected = await _initialize_state()
     
-    # Load run and analysis
+    # Load and validate run result
+    run_result = _load_and_validate_run(run_id, json_output)
+    
+    # Get historical data if requested
+    model_performance_data, recommendation_history = await _get_historical_data(
+        historical, db_connected, days, json_output, run_result.config_path
+    )
+    
+    # Generate recommendations
+    recommendations = await _generate_recommendations_wrapper_async(
+        run_result, model_performance_data, recommendation_history
+    )
+    
+    # Save and display results
+    await _save_and_display_results(
+        run_result, recommendations, model_performance_data, db_connected, json_output
+    )
+
+
+def _load_and_validate_run(run_id: Optional[str], json_output: bool):
+    """Load and validate run result."""
     run_result = state.get_run(run_id)
     if not run_result:
-        if json_output:
-            import json
-            print(json.dumps({"error": "No run found"}, indent=2))
-        else:
-            console.print(format_error("No run found. Run 'arc run' first."))
-        raise click.exceptions.Exit(1)
+        _handle_json_error("No run found. Run 'arc run' first.", json_output)
     
-    # Check if analysis exists
     if not run_result.analysis:
-        if json_output:
-            import json
-            print(json.dumps({"error": "No analysis found. Run 'arc analyze' first."}, indent=2))
-        else:
-            console.print(format_error("No analysis found. Run 'arc analyze' first."))
-        raise click.exceptions.Exit(1)
+        _handle_json_error("No analysis found. Run 'arc analyze' first.", json_output)
     
-    # Get historical model performance if requested and database is available
+    return run_result
+
+
+async def _get_historical_data(historical: bool, db_connected: bool, days: int, 
+                              json_output: bool, config_path: str):
+    """Get historical model performance and recommendation data."""
     model_performance_data = None
     recommendation_history = None
     
@@ -105,16 +128,18 @@ async def _recommend_async(run_id: Optional[str], historical: bool, days: int, j
                     console=console
                 ) as progress:
                     progress.add_task("Analyzing model performance history...", total=None)
-                    
                     model_performance_data = await _get_model_performance_data(db_client, days)
-                    recommendation_history = await _get_recommendation_history(db_client, run_result.config_path, days)
+                    recommendation_history = await _get_recommendation_history(db_client, config_path, days)
             else:
                 model_performance_data = await _get_model_performance_data(db_client, days)
-                recommendation_history = await _get_recommendation_history(db_client, run_result.config_path, days)
+                recommendation_history = await _get_recommendation_history(db_client, config_path, days)
     
-    # Generate recommendations with enhanced data
-    recommendations = _generate_recommendations(run_result, model_performance_data, recommendation_history)
-    
+    return model_performance_data, recommendation_history
+
+
+async def _save_and_display_results(run_result, recommendations, model_performance_data, 
+                                   db_connected: bool, json_output: bool):
+    """Save recommendations and display results."""
     # Save recommendations
     state.save_recommendations(run_result.run_id, recommendations)
     
@@ -199,253 +224,408 @@ async def _save_recommendations_to_database(db_client, run_result, recommendatio
     pass
 
 
-def _generate_recommendations(run_result, model_performance_data: Optional[dict] = None, 
+async def _generate_recommendations_async(run_result, model_performance_data: Optional[dict] = None, 
                             recommendation_history: Optional[dict] = None) -> dict[str, Any]:
-    """Generate recommendations based on run and analysis."""
-    recommendations = {
-        "run_id": run_result.run_id,
-        "current_reliability": run_result.reliability_score,
-        "expected_improvement": 0.0,
-        "config_changes": [],
-        "model_optimization": None,
-        "implementation_steps": [],
-        "database_enhanced": model_performance_data is not None
-    }
+    """Generate recommendations using the pure LLM-based recommendation engine."""
+    from arc.recommendations import RecommendationEngine, RecommendationRequest, RecommendationResponse
+    from arc.recommendations.llm_client import create_llm_client
+    from arc.recommendations.data_extractor import SimulationDataExtractor
     
-    # Analyze top issues from analysis
-    top_issues = run_result.analysis.get("top_issues", [])
+    # Initialize the pure LLM-based recommendation engine with real LLM
+    logger.info("Creating OpenRouter LLM client...")
+    llm_client = create_llm_client("openrouter")  # Use OpenRouter for real LLM analysis
+    
+    if llm_client:
+        logger.info(f"LLM client created successfully: {type(llm_client).__name__}")
+    else:
+        logger.error("Failed to create LLM client - falling back to basic analysis")
+    
+    engine = RecommendationEngine(llm_client=llm_client)
+    
+    # Create data extractor and extract simulation context
+    data_extractor = SimulationDataExtractor()
+    
+    try:
+        logger.info("Extracting simulation context from run results...")
+        # First try to extract from run_result directly
+        simulation_context = data_extractor.extract_from_run_result(run_result)
+        
+        # If we have historical data, enrich the context
+        if model_performance_data:
+            logger.info("Enriching with historical performance data...")
+            simulation_context = data_extractor.enrich_with_historical_data(
+                simulation_context, 
+                model_performance_data
+            )
+        
+        logger.info(f"Simulation context prepared with {len(simulation_context.failure_data)} failures and {len(simulation_context.success_data)} successes")
+        
+        # Generate recommendations using the new method
+        recommendations_response = await engine.generate_recommendations_from_context(simulation_context)
+        
+        # Extract the actual recommendations list
+        recommendations = recommendations_response.recommendations if hasattr(recommendations_response, 'recommendations') else []
+        
+        logger.info(f"Generated {len(recommendations)} recommendations")
+        
+        # Use the existing response building logic
+        return _build_response(run_result, recommendations_response, model_performance_data)
+        
+    except Exception as e:
+        logger.error(f"Error in recommendation generation: {e}", exc_info=True)
+        
+        # Fallback to analysis data extraction if run_result extraction fails
+        try:
+            logger.info("Trying fallback extraction from analysis data...")
+            
+            # Use the existing analysis data directly 
+            simulation_context = data_extractor.extract_from_analysis_data(
+                run_result.analysis, 
+                run_result.config_path
+            )
+            
+            if model_performance_data:
+                simulation_context = data_extractor.enrich_with_historical_data(
+                    simulation_context, 
+                    model_performance_data
+                )
+            
+            recommendations_response = await engine.generate_recommendations_from_context(simulation_context)
+            recommendations = recommendations_response.recommendations if hasattr(recommendations_response, 'recommendations') else []
+            
+            # Use the existing response building logic  
+            return _build_response(run_result, recommendations_response, model_performance_data)
+            
+        except Exception as fallback_error:
+            logger.error(f"Fallback extraction also failed: {fallback_error}", exc_info=True)
+            
+            # Return minimal response indicating the issue
+            return {
+                "run_id": run_result.run_id,
+                "recommendations": [],
+                "analysis_metadata": {
+                    "error": "Failed to extract simulation data for analysis",
+                    "analysis_approach": "failed",
+                    "llm_confidence": 0.0
+                },
+                "processing_time_seconds": 0.0
+            }
+
+
+def _extract_analysis_data(analysis: dict):
+    """Extract failure data from analysis for LLM-based recommendation engine."""
+    failures = []
+    trajectories = []
+    scenarios = []
+    
+    top_issues = analysis.get("top_issues", [])
     
     for issue in top_issues:
-        if "currency" in issue["title"].lower():
-            # Currency assumption fix
-            recommendations["config_changes"].append({
-                "title": "Add Multi-Currency Support",
-                "description": "Configure agent to handle multiple currencies with explicit conversion",
-                "impact": "high",
-                "yaml_diff": """system_prompt: |
-  You are a financial analyst. When handling monetary values:
-  1. Always identify the currency being used
-  2. Convert to requested currency if different
-  3. Never assume USD unless explicitly stated
-  
-tools:
-  - name: currency_converter
-    description: Convert between currencies
-    enabled: true"""
-            })
-            recommendations["expected_improvement"] += 18.0  # Based on demo target
-            
-        elif "timeout" in issue["title"].lower():
-            recommendations["config_changes"].append({
-                "title": "Add Request Timeouts",
-                "description": "Configure timeouts to prevent hanging on slow API calls",
-                "impact": "medium",
-                "yaml_diff": """max_execution_time: 30
-request_timeout: 10
-retry_policy:
-  max_attempts: 3
-  backoff: exponential"""
-            })
-            recommendations["expected_improvement"] += 5.0
-            
-        elif "tool" in issue["title"].lower():
-            recommendations["config_changes"].append({
-                "title": "Fix Tool Configuration",
-                "description": "Ensure all tools are properly configured with error handling",
-                "impact": "medium",
-                "yaml_diff": """tools:
-  - name: calculator
-    enabled: true
-    error_handling: graceful
-    fallback: manual_calculation"""
-            })
-            recommendations["expected_improvement"] += 3.0
+        # Extract failure information for LLM analysis
+        failure = {
+            "error_message": issue.get("technical_details", ""),
+            "failure_reason": issue.get("title", ""),
+            "severity": issue.get("severity", "medium"),
+            "affected_count": len(issue.get("affected_scenarios", []))
+        }
+        failures.append(failure)
+        
+        # Create trajectory information from available data
+        trajectory = {
+            "full_trajectory": [],  # Limited data available from current analysis
+            "tool_calls": [],
+            "execution_steps": issue.get("affected_scenarios", []),
+            "execution_time": 30  # Default estimate
+        }
+        trajectories.append(trajectory)
+        
+        # Create scenario context for LLM
+        scenario_chars = issue.get("scenario_characteristics", {})
+        scenario = {
+            "task_prompt": f"Task involving {issue.get('title', 'unknown issue')}",
+            "expected_tools": scenario_chars.get("expected_tools", []),
+            "complexity_level": scenario_chars.get("complexity", "medium"),
+            "domain": scenario_chars.get("domain", "general")
+        }
+        scenarios.append(scenario)
     
-    # Model optimization
-    current_model = run_result.analysis.get("model", "openai/gpt-4.1")
+    # If no specific failures found, create a general analysis request for LLM
+    if not failures:
+        failures = [{
+            "error_message": "General performance issues detected - needs LLM analysis",
+            "failure_reason": "reliability_below_threshold",
+            "severity": "medium",
+            "affected_count": 1
+        }]
+        trajectories = [{
+            "full_trajectory": [], 
+            "tool_calls": [],
+            "execution_time": 30
+        }]
+        scenarios = [{
+            "task_prompt": "General agent performance optimization",
+            "expected_tools": [],
+            "complexity_level": "medium",
+            "domain": "general"
+        }]
     
-    if model_performance_data and model_performance_data.get("models"):
-        # Use real historical data
-        models_by_name = {m["model"]: m for m in model_performance_data["models"]}
-        current_perf = models_by_name.get(current_model, {
-            "avg_reliability": run_result.reliability_score,
-            "avg_cost": run_result.total_cost / run_result.scenario_count if run_result.scenario_count > 0 else 0.001
+    return failures, trajectories, scenarios
+
+
+def _build_response(run_result, response, model_performance_data: Optional[dict] = None) -> dict[str, Any]:
+    """Build response from LLM-generated recommendations."""
+    
+    # Extract config changes from LLM recommendations
+    config_changes = []
+    total_expected_improvement = 0
+    
+    for rec in response.recommendations:
+        config_changes.append({
+            "section": "llm_generated",
+            "description": rec["specific_problem"],
+            "yaml_changes": rec["yaml_changes"],
+            "reasoning": rec["recommended_fix"],
+            "confidence": rec["confidence"],
+            "expected_improvement": rec["expected_improvement"]
         })
-        
-        # Calculate cost per 1k tokens based on actual usage
-        avg_tokens_per_scenario = current_perf.get("total_tokens", 1500) / current_perf.get("runs", 1) / 50  # Assume 50 scenarios per run
-        cost_per_1k = (current_perf["avg_cost"] / avg_tokens_per_scenario) if avg_tokens_per_scenario > 0 else 0.001
-        
-        recommendations["model_optimization"] = {
-            "current": {
-                "model": current_model,
-                "reliability": current_perf["avg_reliability"] * 100,
-                "cost_per_1k": cost_per_1k,
-                "runs_analyzed": current_perf.get("runs", 0)
-            },
-            "alternatives": []
-        }
-        
-        # Find alternatives from real data
-        for model_data in model_performance_data["models"]:
-            if model_data["model"] != current_model:
-                alt_tokens_per_scenario = model_data.get("total_tokens", 1500) / model_data.get("runs", 1) / 50
-                alt_cost_per_1k = (model_data["avg_cost"] / alt_tokens_per_scenario) if alt_tokens_per_scenario > 0 else 0.001
-                savings = ((cost_per_1k - alt_cost_per_1k) / cost_per_1k * 100) if cost_per_1k > 0 else 0
-                
-                if savings > 0:  # Only show models that save money
-                    recommendations["model_optimization"]["alternatives"].append({
-                        "model": model_data["model"],
-                        "reliability": model_data["avg_reliability"] * 100,
-                        "cost_per_1k": alt_cost_per_1k,
-                        "savings": savings,
-                        "runs_analyzed": model_data["runs"],
-                        "confidence": "high" if model_data["runs"] >= 10 else "medium" if model_data["runs"] >= 5 else "low"
-                    })
-        
-        # Sort by savings and pick best
-        if recommendations["model_optimization"]["alternatives"]:
-            recommendations["model_optimization"]["alternatives"].sort(key=lambda x: x["savings"], reverse=True)
-            best = recommendations["model_optimization"]["alternatives"][0]
-            if best["reliability"] >= current_perf["avg_reliability"] * 100 * 0.95:  # Within 5% reliability
-                recommendations["model_optimization"]["best_alternative"] = best
-    else:
-        # Fallback to mock data if no historical data
-        recommendations["model_optimization"] = {
-            "current": {
-                "model": current_model,
-                "reliability": run_result.reliability_score * 100,
-                "cost_per_1k": 0.00200
-            },
-            "alternatives": [
-                {
-                    "model": "anthropic/claude-3.5-haiku",
-                    "reliability": 97.0,
-                    "cost_per_1k": 0.00080,
-                    "savings": 60.0
-                },
-                {
-                    "model": "openai/gpt-4.1-mini",
-                    "reliability": 95.0,
-                    "cost_per_1k": 0.00040,
-                    "savings": 80.0
-                },
-                {
-                    "model": "meta-llama/llama-4-scout",
-                    "reliability": 92.0,
-                    "cost_per_1k": 0.00008,
-                    "savings": 96.0
-                }
-            ],
-            "best_alternative": None
-        }
-        
-        # Only recommend if reliability is acceptable
-        for alt in recommendations["model_optimization"]["alternatives"]:
-            if alt["reliability"] >= run_result.reliability_score * 100 * 0.95:
-                recommendations["model_optimization"]["best_alternative"] = alt
-                break
+        total_expected_improvement += rec["expected_improvement"]
     
-    # Implementation steps
-    recommendations["implementation_steps"] = [
-        "Create a backup of your current configuration",
-        "Apply the recommended configuration changes",
-        "Test with a smaller scenario set first (arc run --scenarios 10)",
-        "Monitor for any unexpected behavior",
-        "Run full validation once initial tests pass"
-    ]
+    # Build response with LLM-generated recommendations
+    llm_recommendations = {
+        "run_id": run_result.run_id,
+        "current_reliability": run_result.reliability_score,
+        "expected_improvement": total_expected_improvement,
+        "config_changes": config_changes,
+        "model_optimization": _build_model_optimization(run_result, model_performance_data),
+        "implementation_steps": [
+            "Review the LLM-generated YAML changes below",
+            "Test each recommendation in a development environment",
+            "Apply changes incrementally and measure impact",
+            "Monitor performance improvements"
+        ] if config_changes else [],
+        "analysis_approach": "pure_llm_based",
+        "llm_analysis": {
+            "confidence_score": response.confidence_score,
+            "processing_time": response.processing_time,
+            "analysis_summary": response.analysis_summary,
+            "total_recommendations": len(response.recommendations)
+        }
+    }
     
-    return recommendations
+    return llm_recommendations
+
+
+def _build_model_optimization(run_result, model_performance_data: Optional[dict] = None):
+    """Build model optimization recommendations if data is available."""
+    if not model_performance_data or not model_performance_data.get("models"):
+        return None
+    
+    current_model = "gpt-4"  # Default assumption
+    best_model = max(model_performance_data["models"], key=lambda m: m["avg_reliability"])
+    
+    if best_model["avg_reliability"] > run_result.reliability_score:
+        return {
+            "current_model": current_model,
+            "recommended_model": best_model["model"],
+            "expected_reliability_gain": best_model["avg_reliability"] - run_result.reliability_score,
+            "cost_impact": best_model["avg_cost"],
+            "confidence": "high" if best_model["runs"] >= 10 else "medium"
+        }
+    
+    return None
+
+
+# Pure LLM-based recommendations - direct async call
+async def _generate_recommendations_wrapper_async(run_result, model_performance_data: Optional[dict] = None, 
+                            recommendation_history: Optional[dict] = None) -> dict[str, Any]:
+    """Generate pure LLM-based recommendations."""
+    return await _generate_recommendations_async(run_result, model_performance_data, recommendation_history)
 
 
 def _display_recommendations_ui(run_result, recommendations, model_performance_data):
-    """Display recommendations in rich UI."""
+    """Display failure-based recommendations in rich UI."""
+    _display_header(run_result, recommendations)
+    _display_config_changes(recommendations)
+    _display_model_optimization(recommendations, model_performance_data)
+    _display_implementation_steps(recommendations, run_result)
+
+
+def _display_header(run_result, recommendations):
+    """Display recommendation header with metrics."""
     console.print()
-    console.print_header("Configuration Improvement Recommendations")
+    console.print_header("LLM-Generated Improvement Recommendations")
     
     console.print_metric("Current reliability", f"{run_result.reliability_percentage:.1f}%")
     console.print_metric("Expected improvement", f"+{recommendations['expected_improvement']:.1f} percentage points", style="success")
     
-    if recommendations.get("database_enhanced"):
-        console.print_metric("Analysis type", "Historical data-driven", style="info")
+    # Show LLM analysis info
+    llm_analysis = recommendations.get("llm_analysis", {})
+    if llm_analysis:
+        console.print_metric("Analysis approach", recommendations.get("analysis_approach", "pure_llm_based"), style="info")
+        console.print_metric("LLM confidence", f"{llm_analysis.get('confidence_score', 0):.2f}", style="info")
+        console.print_metric("Processing time", f"{llm_analysis.get('processing_time', 0):.2f}s", style="muted")
     console.print()
+
+
+def _display_config_changes(recommendations):
+    """Display LLM-generated configuration change recommendations."""
+    if not recommendations.get("config_changes"):
+        return
     
-    # Configuration changes
-    console.print("[primary]Recommended Configuration Changes[/primary]")
+    console.print("[primary]LLM-Generated YAML Configuration Improvements[/primary]")
+    console.print("Based on AI analysis of your actual simulation data and execution patterns")
     console.print()
     
     for i, change in enumerate(recommendations["config_changes"], 1):
-        console.print(f"{i}. [success]{change['title']}[/success]")
-        console.print(f"   {change['description']}", style="muted")
-        console.print()
-        
-        # Show YAML diff
-        if change.get("yaml_diff"):
-            console.print("   Configuration change:")
-            syntax = Syntax(change["yaml_diff"], "yaml", theme="monokai", line_numbers=False)
-            console.print(Panel(syntax, border_style="muted"))
-        console.print()
+        _display_single_config_change(i, change)
+
+
+def _display_single_config_change(index: int, change: dict):
+    """Display a single LLM-generated configuration change recommendation."""
+    # Use description as the title for LLM recommendations
+    title = change.get("description", "LLM Recommendation")
+    confidence = change.get("confidence", 0.5)
     
-    # Model optimization
-    if recommendations.get("model_optimization"):
-        console.print("[primary]Multi-Model Cost Optimization[/primary]")
+    # Color based on confidence level
+    if confidence > 0.8:
+        color = "success"
+    elif confidence > 0.6:
+        color = "warning"
+    else:
+        color = "info"
+    
+    console.print(f"{index}. [{color}]{title}[/{color}]")
+    console.print(f"   [dim]Confidence: {confidence:.2f}[/dim]")
+    
+    # Show the reasoning/root cause
+    if change.get("reasoning"):
+        console.print(f"   [info]Analysis: {change['reasoning']}[/info]")
+    
+    # Show expected improvement
+    if change.get("expected_improvement"):
+        console.print(f"   [success]Expected improvement: +{change['expected_improvement']:.1f}%[/success]")
+    
+    console.print()
+    
+    # Show YAML changes
+    yaml_changes = change.get("yaml_changes")
+    if yaml_changes:
+        console.print("   Add to your YAML configuration:")
         
-        if recommendations.get("database_enhanced"):
-            console.print("Based on historical performance data")
-        console.print()
+        # Handle both string and dictionary formats
+        if isinstance(yaml_changes, dict):
+            # Convert dict to YAML string
+            try:
+                import yaml
+                yaml_string = yaml.dump(yaml_changes, default_flow_style=False, indent=2)
+            except ImportError:
+                # Fallback to JSON format if PyYAML not available
+                import json
+                yaml_string = json.dumps(yaml_changes, indent=2)
+        elif isinstance(yaml_changes, str):
+            yaml_string = yaml_changes
+        else:
+            yaml_string = str(yaml_changes)
         
-        table = Table(show_header=True, header_style="bold")
-        table.add_column("Model", style="info")
-        table.add_column("Reliability", justify="right")
-        table.add_column("Cost/1k", justify="right")
-        table.add_column("Savings", justify="right", style="success")
-        
-        if recommendations.get("database_enhanced"):
-            table.add_column("Confidence", justify="center")
-        
-        current_model = recommendations["model_optimization"]["current"]
+        syntax = Syntax(yaml_string, "yaml", theme="monokai", line_numbers=False)
+        console.print(Panel(syntax, title="LLM-Generated YAML Changes", border_style="info"))
+    console.print()
+
+
+def _get_severity_color(severity: str) -> str:
+    """Get color for severity level."""
+    severity_colors = {
+        "critical": "error",
+        "high": "warning", 
+        "medium": "info",
+        "low": "muted"
+    }
+    return severity_colors.get(severity, "info")
+
+
+def _display_model_optimization(recommendations, model_performance_data):
+    """Display model optimization recommendations."""
+    if not recommendations.get("model_optimization"):
+        return
+    
+    console.print("[primary]Multi-Model Cost Optimization[/primary]")
+    
+    if recommendations.get("database_enhanced"):
+        console.print("Based on historical performance data")
+    console.print()
+    
+    # Create and populate table
+    table = _create_model_optimization_table(recommendations)
+    _populate_model_optimization_table(table, recommendations)
+    
+    console.print(table)
+    console.print()
+    
+    # Show best recommendation
+    _display_best_model_recommendation(recommendations)
+
+
+def _create_model_optimization_table(recommendations):
+    """Create model optimization table structure."""
+    table = Table(show_header=True, header_style="bold")
+    table.add_column("Model", style="info")
+    table.add_column("Reliability", justify="right")
+    table.add_column("Cost/1k", justify="right")
+    table.add_column("Savings", justify="right", style="success")
+    
+    if recommendations.get("database_enhanced"):
+        table.add_column("Confidence", justify="center")
+    
+    return table
+
+
+def _populate_model_optimization_table(table, recommendations):
+    """Populate model optimization table with data."""
+    current_model = recommendations["model_optimization"]["current"]
+    row = [
+        f"{current_model['model']} (current)",
+        f"{current_model['reliability']:.1f}%",
+        f"${current_model['cost_per_1k']:.4f}",
+        "-"
+    ]
+    if recommendations.get("database_enhanced"):
+        row.append(f"({current_model.get('runs_analyzed', 0)} runs)")
+    table.add_row(*row)
+    
+    for alt in recommendations["model_optimization"]["alternatives"][:5]:  # Show top 5
         row = [
-            f"{current_model['model']} (current)",
-            f"{current_model['reliability']:.1f}%",
-            f"${current_model['cost_per_1k']:.4f}",
-            "-"
+            alt["model"],
+            f"{alt['reliability']:.1f}%",
+            f"${alt['cost_per_1k']:.4f}",
+            f"{alt['savings']:.1f}%"
         ]
         if recommendations.get("database_enhanced"):
-            row.append(f"({current_model.get('runs_analyzed', 0)} runs)")
+            confidence = alt.get("confidence", "unknown")
+            conf_style = "success" if confidence == "high" else "warning" if confidence == "medium" else "muted"
+            row.append(f"[{conf_style}]{confidence}[/{conf_style}]")
         table.add_row(*row)
-        
-        for alt in recommendations["model_optimization"]["alternatives"][:5]:  # Show top 5
-            row = [
-                alt["model"],
-                f"{alt['reliability']:.1f}%",
-                f"${alt['cost_per_1k']:.4f}",
-                f"{alt['savings']:.1f}%"
-            ]
-            if recommendations.get("database_enhanced"):
-                confidence = alt.get("confidence", "unknown")
-                conf_style = "success" if confidence == "high" else "warning" if confidence == "medium" else "muted"
-                row.append(f"[{conf_style}]{confidence}[/{conf_style}]")
-            table.add_row(*row)
-        
-        console.print(table)
+
+
+def _display_best_model_recommendation(recommendations):
+    """Display the best model recommendation."""
+    best = recommendations["model_optimization"].get("best_alternative")
+    if best:
+        console.print(
+            f"[success]Recommended:[/success] Switch to {best['model']} for "
+            f"{best['savings']:.1f}% cost reduction with {best['reliability']:.1f}% reliability"
+        )
+        if recommendations.get("database_enhanced") and best.get("confidence"):
+            console.print(f"Confidence: {best['confidence']} (based on {best.get('runs_analyzed', 0)} runs)")
         console.print()
-        
-        best = recommendations["model_optimization"].get("best_alternative")
-        if best:
-            console.print(
-                f"[success]Recommended:[/success] Switch to {best['model']} for "
-                f"{best['savings']:.1f}% cost reduction with {best['reliability']:.1f}% reliability"
-            )
-            if recommendations.get("database_enhanced") and best.get("confidence"):
-                console.print(f"Confidence: {best['confidence']} (based on {best.get('runs_analyzed', 0)} runs)")
-            console.print()
-    
-    # Implementation guidance
+
+
+def _display_implementation_steps(recommendations, run_result):
+    """Display implementation guidance."""
     console.print("[primary]Implementation Steps[/primary]")
     console.print()
     for i, step in enumerate(recommendations["implementation_steps"], 1):
         console.print(f"{i}. {step}")
     console.print()
     
-    console.print("Run [info]arc diff {run_result.config_path} improved_config.yaml[/info] to validate improvements", style="muted")
+    console.print(f"Run [info]arc diff {run_result.config_path} improved_config.yaml[/info] to validate improvements", style="muted")
     console.print()

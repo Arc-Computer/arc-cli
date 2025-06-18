@@ -11,6 +11,7 @@ from sqlalchemy import text
 
 from arc.cli.utils import ArcConsole, CLIState, format_error, format_success
 from arc.cli.utils import db_manager, HybridState
+from arc.analysis.advanced_analyzer import AdvancedFailureAnalyzer, FailureTrace
 
 console = ArcConsole()
 # Will be initialized based on database availability
@@ -39,7 +40,8 @@ async def _initialize_state():
 @click.option('--historical', is_flag=True, help='Include historical failure patterns from database')
 @click.option('--days', default=30, help='Days of history to include (default: 30)')
 @click.option('--json', 'json_output', is_flag=True, help='Output JSON instead of rich text')
-def analyze(run_id: Optional[str], historical: bool, days: int, json_output: bool):
+@click.option('--deep-analysis', is_flag=True, help='Use OpenAI o3 for advanced failure pattern analysis')
+def analyze(run_id: Optional[str], historical: bool, days: int, json_output: bool, deep_analysis: bool):
     """Analyze failures from the last run.
     
     This command:
@@ -48,15 +50,17 @@ def analyze(run_id: Optional[str], historical: bool, days: int, json_output: boo
     3. Identifies root causes
     4. Shows actionable insights
     5. Optionally includes historical failure patterns from database
+    6. Optionally performs deep analysis using OpenAI o3 for complex failures
     
     Example:
         arc analyze
         arc analyze --run run_20240110_143022_abc123
         arc analyze --historical --days 7
+        arc analyze --deep-analysis  # Advanced o3 analysis for complex failures
     """
     try:
         # Run async analysis
-        asyncio.run(_analyze_async(run_id, historical, days, json_output))
+        asyncio.run(_analyze_async(run_id, historical, days, json_output, deep_analysis))
     except Exception as e:
         if json_output:
             import json
@@ -66,7 +70,7 @@ def analyze(run_id: Optional[str], historical: bool, days: int, json_output: boo
         raise click.exceptions.Exit(1)
 
 
-async def _analyze_async(run_id: Optional[str], historical: bool, days: int, json_output: bool):
+async def _analyze_async(run_id: Optional[str], historical: bool, days: int, json_output: bool, deep_analysis: bool):
     """Perform async analysis with database queries."""
     # Initialize state
     db_connected = await _initialize_state()
@@ -139,14 +143,40 @@ async def _analyze_async(run_id: Optional[str], historical: bool, days: int, jso
     if historical_patterns:
         failure_clusters = _enhance_with_historical_data(failure_clusters, historical_patterns)
     
+    # Perform deep analysis with o3 if requested
+    deep_analysis_result = None
+    if deep_analysis:
+        clustering_confidence = _calculate_clustering_confidence(failure_clusters)
+        
+        if not json_output:
+            with Progress(
+                SpinnerColumn(),
+                TextColumn("[progress.description]{task.description}"),
+                console=console
+            ) as progress:
+                progress.add_task("Performing deep analysis with o3...", total=None)
+                deep_analysis_result = await _perform_deep_analysis(failures, run_result.config_path, clustering_confidence)
+        else:
+            deep_analysis_result = await _perform_deep_analysis(failures, run_result.config_path, clustering_confidence)
+    
     # Update analysis
     analysis["clusters"] = failure_clusters
-    analysis["top_issues"] = _identify_top_issues(failure_clusters, historical_patterns)
+    analysis["top_issues"] = _identify_top_issues(failure_clusters, historical_patterns, deep_analysis_result)
     
     if historical_patterns:
         analysis["historical_patterns"] = historical_patterns
     if cross_run_insights:
         analysis["cross_run_insights"] = cross_run_insights
+    if deep_analysis_result:
+        analysis["deep_analysis"] = {
+            "root_causes": deep_analysis_result.root_causes,
+            "systemic_patterns": deep_analysis_result.systemic_patterns,
+            "minimal_reproductions": deep_analysis_result.minimal_reproductions,
+            "infrastructure_recommendations": deep_analysis_result.infrastructure_recommendations,
+            "confidence_score": deep_analysis_result.confidence_score,
+            "processing_time": deep_analysis_result.processing_time,
+            "analysis_cost": deep_analysis_result.analysis_cost
+        }
     
     # Save analysis
     state.save_analysis(run_result.run_id, analysis)
@@ -165,7 +195,7 @@ async def _analyze_async(run_id: Optional[str], historical: bool, days: int, jso
         import json
         print(json.dumps(analysis, indent=2))
     else:
-        _display_analysis_ui(run_result, analysis, historical_patterns, cross_run_insights)
+        _display_analysis_ui(run_result, analysis, historical_patterns, cross_run_insights, deep_analysis_result)
 
 
 async def _get_historical_patterns(db_client, days: int) -> dict:
@@ -321,7 +351,7 @@ def _pattern_to_category(pattern: str) -> str:
     return mapping.get(pattern, "other")
 
 
-def _display_analysis_ui(run_result, analysis, historical_patterns, cross_run_insights):
+def _display_analysis_ui(run_result, analysis, historical_patterns, cross_run_insights, deep_analysis_result=None):
     """Display analysis results in rich UI."""
     console.print()
     console.print_header(f"Failure Analysis for {run_result.config_path}")
@@ -390,6 +420,37 @@ def _display_analysis_ui(run_result, analysis, historical_patterns, cross_run_in
                 console.print(f"   {issue['historical_context']}", style="info")
             console.print()
     
+    # Deep analysis results
+    if deep_analysis_result:
+        console.print("[primary]o3 Deep Analysis Results[/primary]")
+        console.print()
+        
+        # Summary
+        console.print_metric("Processing time", f"{deep_analysis_result.processing_time:.1f}s")
+        console.print_metric("Analysis cost", f"${deep_analysis_result.analysis_cost:.3f}")
+        console.print_metric("Confidence", f"{deep_analysis_result.confidence_score:.1%}")
+        console.print()
+        
+        # Root causes
+        if deep_analysis_result.root_causes:
+            console.print("[secondary]Root Causes Identified[/secondary]")
+            for i, cause in enumerate(deep_analysis_result.root_causes[:3], 1):
+                console.print(f"{i}. [error]{cause['title']}[/error] (confidence: {cause.get('confidence', 0):.1%})")
+                console.print(f"   {cause['description']}", style="muted")
+                if cause.get('affected_scenarios'):
+                    console.print(f"   Affects: {', '.join(cause['affected_scenarios'][:3])}", style="info")
+                console.print()
+        
+        # Infrastructure recommendations
+        if deep_analysis_result.infrastructure_recommendations:
+            console.print("[secondary]Infrastructure Recommendations[/secondary]")
+            for i, rec in enumerate(deep_analysis_result.infrastructure_recommendations[:3], 1):
+                priority_style = "error" if rec.get('priority') == 'critical' else "warning" if rec.get('priority') == 'high' else "info"
+                console.print(f"{i}. [{priority_style}]{rec['title']}[/{priority_style}] ({rec.get('priority', 'medium')} priority)")
+                console.print(f"   {rec['description']}", style="muted")
+                console.print(f"   Implementation: {rec.get('implementation_effort', 'unknown')} effort, {rec.get('impact', 'unknown')} impact", style="info")
+                console.print()
+    
     console.print("Run [info]arc recommend[/info] for specific configuration improvements", style="muted")
     console.print()
 
@@ -437,7 +498,7 @@ def _cluster_failures(failures: List[Dict]) -> List[Dict]:
     return cluster_list
 
 
-def _identify_top_issues(clusters: List[Dict], historical_patterns: Optional[Dict] = None) -> List[Dict]:
+def _identify_top_issues(clusters: List[Dict], historical_patterns: Optional[Dict] = None, deep_analysis_result=None) -> List[Dict]:
     """Identify top issues from failure clusters."""
     issues = []
     
@@ -482,4 +543,76 @@ def _identify_top_issues(clusters: List[Dict], historical_patterns: Optional[Dic
         
         issues.append(issue)
     
+    # Add deep analysis insights if available
+    if deep_analysis_result and deep_analysis_result.infrastructure_recommendations:
+        for rec in deep_analysis_result.infrastructure_recommendations[:2]:  # Top 2 recommendations
+            issues.append({
+                "title": f"[o3] {rec['title']}",
+                "description": rec['description'],
+                "severity": rec.get('priority', 'medium'),
+                "recommendation": f"Implementation effort: {rec.get('implementation_effort', 'unknown')}",
+                "historical_context": f"o3 confidence: {deep_analysis_result.confidence_score:.1%}"
+            })
+    
     return issues
+
+
+async def _perform_deep_analysis(failures: List[Dict], config_path: str, clustering_confidence: float):
+    """Perform deep analysis using o3 background mode."""
+    try:
+        # Create placeholder config metadata from path
+        config_name = config_path.split("/")[-1] if config_path else "unknown"
+        agent_config = {
+            "config_path": config_path,
+            "config_name": config_name,
+            "analysis_timestamp": datetime.now().isoformat()
+        }
+        
+        # Convert failure format to FailureTrace objects
+        failure_traces = []
+        for failure in failures:
+            trace = FailureTrace(
+                scenario_id=failure.get("scenario_id", "unknown"),
+                failure_reason=failure.get("failure_reason", "Unknown"),
+                agent_config=agent_config,
+                tools_used=failure.get("tools_used", []),
+                execution_time=failure.get("execution_time", 0.0),
+                cost=failure.get("cost", 0.0),
+                context=failure.get("context", {})
+            )
+            failure_traces.append(trace)
+        
+        # Initialize analyzer
+        analyzer = AdvancedFailureAnalyzer(model="o3", cost_limit=0.50)
+        
+        # Perform analysis
+        result = await analyzer.deep_failure_analysis(
+            failures=failure_traces,
+            agent_config=agent_config,
+            clustering_confidence=clustering_confidence
+        )
+        
+        return result
+        
+    except Exception as e:
+        console.print(f"Warning: Deep analysis failed: {str(e)}", style="warning")
+        return None
+
+
+def _calculate_clustering_confidence(clusters: List[Dict]) -> float:
+    """Calculate confidence in clustering results."""
+    if not clusters:
+        return 0.0
+    
+    # Simple heuristic based on cluster distribution
+    total_failures = sum(cluster["count"] for cluster in clusters)
+    largest_cluster = max(clusters, key=lambda x: x["count"])
+    
+    # Higher confidence if failures are well-distributed across patterns
+    # Lower confidence if one cluster dominates (suggests unclear patterns)
+    dominance = largest_cluster["count"] / total_failures
+    
+    # Confidence decreases as dominance increases
+    confidence = max(0.0, 1.0 - dominance)
+    
+    return confidence
